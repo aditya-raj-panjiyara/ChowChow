@@ -70,14 +70,35 @@ pub fn run() {
             {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
+                    let settings = commands::settings::load_settings_internal(&handle);
+                    
+                    let llm_endpoint = if settings.llm.provider == "local" {
+                        if settings.llm.endpoint.is_empty() {
+                            "http://localhost:11434/v1".to_string()
+                        } else {
+                            settings.llm.endpoint.clone()
+                        }
+                    } else if settings.llm.provider == "openai" {
+                        "https://api.openai.com/v1".to_string()
+                    } else if settings.llm.provider == "gemini" {
+                        "https://generativelanguage.googleapis.com/v1beta/openai/".to_string()
+                    } else if settings.llm.provider == "groq" {
+                        "https://api.groq.com/openai/v1".to_string()
+                    } else {
+                        settings.llm.endpoint.clone()
+                    };
+
+                    let api_key = if settings.llm.provider == "local" {
+                        "not-needed".to_string()
+                    } else {
+                        settings.llm.api_key.clone()
+                    };
+
                     match memory_cognee::CogneeMemoryEngine::new(
                         memory_cognee::config::CogneeAppConfig {
-                            llm_endpoint: "http://localhost:11434/v1".to_string(),
-                            llm_model: "gemma4".to_string(),
-                            llm_api_key: "not-needed".to_string(),
-                            // "onnx" runs embeddings in-process (BGE-Small).
-                            // The local Ollama build serves completions only —
-                            // its llama-server runs without `--embeddings`.
+                            llm_endpoint,
+                            llm_model: settings.llm.model,
+                            llm_api_key: api_key,
                             embedding_provider: "onnx".to_string(),
                             storage_root: app_data_dir.join("cognee_data"),
                             dataset_name: "supply_chain_main".to_string(),
@@ -90,13 +111,12 @@ pub fn run() {
                                 .state::<AppState>()
                                 .set_memory(Arc::new(engine));
                             eprintln!(
-                                "[memory] cognee-rs engine active (Ollama @ localhost:11434)"
+                                "[memory] cognee-rs engine active"
                             );
                         }
                         Err(e) => {
                             eprintln!(
-                                "[memory] cognee init failed — staying on SQLite stub. \
-                                 Is Ollama running? (`ollama run gemma4`). Error: {e}"
+                                "[memory] cognee init failed — staying on SQLite stub. Error: {e}"
                             );
                         }
                     }
@@ -114,6 +134,9 @@ pub fn run() {
             commands::corrections::confirm_correction,
             commands::corrections::list_corrections,
             commands::blast_radius::simulate_blast_radius,
+            commands::settings::get_settings,
+            commands::settings::save_settings,
+            commands::settings::get_system_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

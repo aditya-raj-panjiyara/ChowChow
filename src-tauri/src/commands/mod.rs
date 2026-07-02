@@ -8,3 +8,4 @@ pub mod corrections;
 pub mod graph;
 pub mod ingestion;
 pub mod query;
+pub mod settings;
