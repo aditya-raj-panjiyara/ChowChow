@@ -158,7 +158,7 @@ pub async fn save_settings(
 /// Start a lightweight OpenAI-to-Anthropic Messages API proxy server on localhost:11430.
 /// Runs in the background, reading the API key from settings.json on-demand.
 pub fn start_proxy_server(app_handle: AppHandle) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let listener = match TcpListener::bind("127.0.0.1:11430").await {
             Ok(l) => l,
             Err(e) => {
@@ -176,7 +176,7 @@ pub fn start_proxy_server(app_handle: AppHandle) {
             };
             let app_handle = app_handle.clone();
 
-            tokio::spawn(async move {
+            tauri::async_runtime::spawn(async move {
                 let mut buffer = vec![0; 65536];
                 let mut n = 0;
 
