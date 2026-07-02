@@ -11,6 +11,7 @@ interface GraphCanvasProps {
   onSelectNode: (id: string | null) => void;
   onEditNode: (id: string) => void;
   onUpdateNodePosition: (id: string, x: number, y: number) => void;
+  onAddRelationship: (fromId: string, toId: string, label: string) => void;
 }
 
 /**
@@ -30,6 +31,7 @@ export default function GraphCanvas({
   onSelectNode,
   onEditNode,
   onUpdateNodePosition,
+  onAddRelationship,
 }: GraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [nodes, setNodes] = useState<SimulationNode[]>([]);
@@ -38,6 +40,11 @@ export default function GraphCanvas({
   // Pan & Zoom state
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
+
+  // Connection state
+  const [connectingSourceId, setConnectingSourceId] = useState<string | null>(null);
+  const [connectionTargetPos, setConnectionTargetPos] = useState<{ x: number; y: number } | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
   // Drag state
   const dragRef = useRef<{
@@ -151,6 +158,16 @@ export default function GraphCanvas({
 
   // === Mouse move (handles both pan and node drag) ===
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (connectingSourceId) {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) {
+        const x = (e.clientX - rect.left - pan.x) / zoom;
+        const y = (e.clientY - rect.top - pan.y) / zoom;
+        setConnectionTargetPos({ x, y });
+      }
+      return;
+    }
+
     const drag = dragRef.current;
     if (!drag.type) return;
 
@@ -170,10 +187,19 @@ export default function GraphCanvas({
           : n
       ));
     }
-  }, [zoom]);
+  }, [zoom, connectingSourceId, pan]);
 
   // === Mouse up ===
   const handleMouseUp = useCallback(() => {
+    if (connectingSourceId) {
+      if (hoveredNodeId && hoveredNodeId !== connectingSourceId) {
+        onAddRelationship(connectingSourceId, hoveredNodeId, 'relies_on');
+      }
+      setConnectingSourceId(null);
+      setConnectionTargetPos(null);
+      return;
+    }
+
     const drag = dragRef.current;
     if (drag.type === 'node' && drag.nodeId) {
       const node = nodes.find(n => n.id === drag.nodeId);
@@ -182,7 +208,7 @@ export default function GraphCanvas({
       }
     }
     dragRef.current = { type: null, nodeId: null, startX: 0, startY: 0, startNodeX: 0, startNodeY: 0, startPanX: 0, startPanY: 0 };
-  }, [nodes, onUpdateNodePosition]);
+  }, [nodes, onUpdateNodePosition, connectingSourceId, hoveredNodeId, onAddRelationship]);
 
   // Canvas transform string
   const transform = `translate(${pan.x}, ${pan.y}) scale(${zoom})`;
@@ -282,6 +308,32 @@ export default function GraphCanvas({
               ))}
             </g>
 
+            {/* Temporary drag-to-connect line */}
+            {connectingSourceId && connectionTargetPos && (() => {
+              const srcNode = nodes.find(n => n.id === connectingSourceId);
+              if (!srcNode) return null;
+              const p0 = { x: srcNode.x + srcNode.width, y: srcNode.y + srcNode.height - 13 };
+              const p1 = connectionTargetPos;
+              const cp1x = p0.x + 50;
+              const cp1y = p0.y;
+              const cp2x = p1.x - 50;
+              const cp2y = p1.y;
+              const pathData = `M ${p0.x} ${p0.y} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p1.x} ${p1.y}`;
+              return (
+                <g style={{ pointerEvents: 'none' }}>
+                  <path
+                    d={pathData}
+                    fill="none"
+                    stroke="var(--accent-cool)"
+                    strokeWidth={2}
+                    strokeDasharray="5,5"
+                    opacity={0.8}
+                  />
+                  <circle cx={p1.x} cy={p1.y} r={4} fill="var(--accent-cool)" />
+                </g>
+              );
+            })()}
+
             {/* Nodes */}
             <g>
               {nodes.map(node => (
@@ -293,6 +345,9 @@ export default function GraphCanvas({
                   onDragStart={handleNodeDragStart}
                   onEdit={onEditNode}
                   zoom={zoom}
+                  onStartConnection={setConnectingSourceId}
+                  onMouseEnterNode={setHoveredNodeId}
+                  onMouseLeaveNode={(id) => setHoveredNodeId(prev => prev === id ? null : prev)}
                 />
               ))}
             </g>

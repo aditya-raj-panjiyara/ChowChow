@@ -9,3 +9,4 @@ pub mod graph;
 pub mod ingestion;
 pub mod query;
 pub mod settings;
+pub mod google_sync;

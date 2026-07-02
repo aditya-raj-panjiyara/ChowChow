@@ -130,6 +130,10 @@ pub fn run() {
             commands::ingestion::get_ingestion_status,
             commands::query::ask_question,
             commands::graph::get_graph_snapshot,
+            commands::graph::add_custom_node,
+            commands::graph::delete_custom_node,
+            commands::graph::add_custom_relationship,
+            commands::graph::delete_custom_relationship,
             commands::corrections::submit_correction,
             commands::corrections::confirm_correction,
             commands::corrections::list_corrections,
@@ -137,6 +141,7 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::get_system_info,
+            commands::google_sync::sync_google_workspace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

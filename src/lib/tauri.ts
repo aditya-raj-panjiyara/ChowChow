@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import type { AppSettings } from '../types';
 
 // ─── Backend Types ────────────────────────────────────────────────────────────
 
@@ -122,6 +123,54 @@ export async function simulateBlastRadius(
   durationDays: number,
 ): Promise<BlastRadiusResult> {
   return invoke('simulate_blast_radius', { entityId, durationDays });
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  return invoke('get_settings');
+}
+
+export async function saveSettings(settings: AppSettings): Promise<void> {
+  return invoke('save_settings', { settings });
+}
+
+export async function getSystemInfo(): Promise<{ arch: string; os: string }> {
+  return invoke('get_system_info');
+}
+
+export async function addCustomNode(id: string, name: string, entityType: string): Promise<void> {
+  return invoke('add_custom_node', { id, name, entityType });
+}
+
+export async function deleteCustomNode(id: string): Promise<void> {
+  return invoke('delete_custom_node', { id });
+}
+
+export async function addCustomRelationship(fromId: string, toId: string, relationshipType: string): Promise<void> {
+  return invoke('add_custom_relationship', { fromId, toId, relationshipType });
+}
+
+export async function deleteCustomRelationship(fromId: string, toId: string, relationshipType: string): Promise<void> {
+  return invoke('delete_custom_relationship', { fromId, toId, relationshipType });
+}
+
+export interface GoogleSyncParams {
+  api_key: string;
+  client_id: string;
+  client_secret: string;
+  query: string;
+  sync_gmail: boolean;
+  sync_drive: boolean;
+}
+
+export interface GoogleSyncResult {
+  success: boolean;
+  message: string;
+  files_synced: number;
+  entities_extracted: number;
+}
+
+export async function syncGoogleWorkspace(params: GoogleSyncParams): Promise<GoogleSyncResult> {
+  return invoke('sync_google_workspace', { params });
 }
 
 // ─── File Dialog ──────────────────────────────────────────────────────────────

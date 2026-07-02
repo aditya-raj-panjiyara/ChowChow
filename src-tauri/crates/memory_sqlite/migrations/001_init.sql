@@ -58,3 +58,34 @@ CREATE TABLE IF NOT EXISTS stub_relationships (
     FOREIGN KEY (from_id) REFERENCES stub_entities(id),
     FOREIGN KEY (to_id) REFERENCES stub_entities(id)
 );
+
+-- ============================================================================
+-- Custom manual overrides (delta tables applied on top of active memory engine)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS custom_entities (
+    id          TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    attributes  TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS custom_relationships (
+    from_id             TEXT NOT NULL,
+    to_id               TEXT NOT NULL,
+    relationship_type   TEXT NOT NULL,
+    weight              REAL NOT NULL DEFAULT 1.0,
+    active              INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (from_id, to_id, relationship_type)
+);
+
+CREATE TABLE IF NOT EXISTS deleted_entities (
+    id          TEXT PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS deleted_relationships (
+    from_id             TEXT NOT NULL,
+    to_id               TEXT NOT NULL,
+    relationship_type   TEXT NOT NULL,
+    PRIMARY KEY (from_id, to_id, relationship_type)
+);

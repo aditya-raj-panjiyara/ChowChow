@@ -10,6 +10,9 @@ interface GraphNodeProps {
   onEdit: (id: string) => void;
   /** Canvas zoom level for inverse-scaling text */
   zoom: number;
+  onStartConnection: (sourceId: string) => void;
+  onMouseEnterNode: (id: string) => void;
+  onMouseLeaveNode: (id: string) => void;
 }
 
 const entityTypeColors: Record<EntityType, { header: string; headerText: string; border: string }> = {
@@ -58,7 +61,16 @@ const entityTypeLabels: Record<EntityType, string> = {
  * - Draggable, selectable, editable
  * - Pin indicator for manually placed nodes
  */
-export default function GraphNode({ node, isSelected, onSelect, onDragStart, onEdit }: GraphNodeProps) {
+export default function GraphNode({
+  node,
+  isSelected,
+  onSelect,
+  onDragStart,
+  onEdit,
+  onStartConnection,
+  onMouseEnterNode,
+  onMouseLeaveNode,
+}: GraphNodeProps) {
   const colors = entityTypeColors[node.entity.type];
   const nodeWidth = node.width;
   const nodeHeight = node.height;
@@ -81,6 +93,8 @@ export default function GraphNode({ node, isSelected, onSelect, onDragStart, onE
       transform={`translate(${node.x}, ${node.y})`}
       style={{ cursor: 'grab' }}
       onMouseDown={handleMouseDown}
+      onMouseEnter={() => onMouseEnterNode(node.id)}
+      onMouseLeave={() => onMouseLeaveNode(node.id)}
     >
       {/* Selection glow */}
       {isSelected && (
@@ -279,6 +293,18 @@ export default function GraphNode({ node, isSelected, onSelect, onDragStart, onE
         r={3}
         fill={colors.headerText}
         opacity={0.6}
+      />
+      {/* Output port drag-to-connect overlay */}
+      <circle
+        cx={nodeWidth}
+        cy={nodeHeight - 13}
+        r={portRadius * 2.5}
+        fill="transparent"
+        style={{ cursor: 'crosshair' }}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          onStartConnection(node.id);
+        }}
       />
 
       {/* Edit hint on hover — shows via CSS */}

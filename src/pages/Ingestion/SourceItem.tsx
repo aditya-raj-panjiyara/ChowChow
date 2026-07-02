@@ -38,6 +38,11 @@ const sourceIcons: Record<string, ReactNode> = {
       <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
     </svg>
   ),
+  sync: (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+    </svg>
+  ),
 };
 
 /**

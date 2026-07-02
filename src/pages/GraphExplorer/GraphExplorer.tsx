@@ -5,12 +5,15 @@ import GraphSearch from './GraphSearch';
 import GraphFilters from './GraphFilters';
 import NodeModal from './NodeModal';
 import { demoEntities, demoRelationships } from '../../data/demoData';
-import { getGraphSnapshot } from '../../lib/tauri';
+import {
+  getGraphSnapshot,
+  addCustomNode,
+  deleteCustomNode,
+  addCustomRelationship,
+  deleteCustomRelationship,
+} from '../../lib/tauri';
 import type { Entity, EntityType, Relationship } from '../../types';
 
-// Maps both the app's domain types and cognee's semantic types
-// ("Person", "Location", "Product", "Organization"…) onto the fixed
-// five-color palette.
 const ENTITY_TYPE_MAP: Record<string, EntityType> = {
   supplier: 'supplier',
   vendor: 'supplier',
@@ -44,30 +47,24 @@ const ENTITY_TYPE_MAP: Record<string, EntityType> = {
 function mapEntityType(raw: string): EntityType {
   const key = raw.toLowerCase();
   if (ENTITY_TYPE_MAP[key]) return ENTITY_TYPE_MAP[key];
-  // Substring match handles compound labels like "Criminal Organization".
   for (const [fragment, mapped] of Object.entries(ENTITY_TYPE_MAP)) {
     if (key.includes(fragment)) return mapped;
   }
   return 'supplier';
 }
 
-/**
- * GraphExplorer page — ComfyUI-style visual knowledge graph.
- * Full-bleed interactive canvas with:
- * - Drag to move nodes
- * - Pan & zoom canvas
- * - Add/edit/delete nodes
- * - Search and filter
- * - Inspector panel on selection
- */
 export default function GraphExplorer() {
-  // Data state (mutable — supports add/edit/delete)
   const [entities, setEntities] = useState<Entity[]>(demoEntities);
   const [relationships, setRelationships] = useState<Relationship[]>(demoRelationships);
 
-  useEffect(() => {
-    getGraphSnapshot().then(snapshot => {
-      if (snapshot.entities.length === 0) return; // keep demo data when graph is empty
+  const loadGraph = useCallback(async () => {
+    try {
+      const snapshot = await getGraphSnapshot();
+      if (snapshot.entities.length === 0) {
+        setEntities(demoEntities);
+        setRelationships(demoRelationships);
+        return;
+      }
       const mapped: Entity[] = snapshot.entities.map(e => ({
         id: e.id,
         name: e.name,
@@ -86,19 +83,21 @@ export default function GraphExplorer() {
       }));
       setEntities(mapped);
       setRelationships(mappedRels);
-    }).catch(() => {
+    } catch {
       // Backend not running — keep demo data
-    });
+    }
   }, []);
 
-  // UI state
+  useEffect(() => {
+    loadGraph();
+  }, [loadGraph]);
+
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [activeFilters, setActiveFilters] = useState<EntityType[]>(
     ['supplier', 'port', 'factory', 'material', 'customer']
   );
   const [showDeprecated, setShowDeprecated] = useState(false);
 
-  // Modal state
   const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null);
   const [editingEntityId, setEditingEntityId] = useState<string | null>(null);
 
@@ -112,7 +111,6 @@ export default function GraphExplorer() {
     [editingEntityId, entities]
   );
 
-  // Apply filters
   const filteredEntities = useMemo(
     () => entities.filter(e => activeFilters.includes(e.type)),
     [entities, activeFilters]
@@ -137,8 +135,6 @@ export default function GraphExplorer() {
     );
   };
 
-  // === Node operations ===
-
   const handleAddNode = useCallback(() => {
     setModalMode('add');
     setEditingEntityId(null);
@@ -149,21 +145,44 @@ export default function GraphExplorer() {
     setEditingEntityId(id);
   }, []);
 
-  const handleSaveNode = useCallback((entity: Entity) => {
-    if (modalMode === 'add') {
-      setEntities(prev => [...prev, entity]);
-    } else if (modalMode === 'edit') {
-      setEntities(prev => prev.map(e => e.id === entity.id ? entity : e));
+  const handleSaveNode = useCallback(async (entity: Entity) => {
+    try {
+      await addCustomNode(entity.id, entity.name, entity.type);
+      await loadGraph();
+    } catch (err) {
+      console.error('Failed to save custom node', err);
     }
     setModalMode(null);
     setEditingEntityId(null);
-  }, [modalMode]);
+  }, [loadGraph]);
 
-  const handleDeleteNode = useCallback((id: string) => {
-    setEntities(prev => prev.filter(e => e.id !== id));
-    setRelationships(prev => prev.filter(r => r.sourceId !== id && r.targetId !== id));
-    setSelectedNodeId(null);
-  }, []);
+  const handleDeleteNode = useCallback(async (id: string) => {
+    try {
+      await deleteCustomNode(id);
+      setSelectedNodeId(null);
+      await loadGraph();
+    } catch (err) {
+      console.error('Failed to delete custom node', err);
+    }
+  }, [loadGraph]);
+
+  const handleAddRelationship = useCallback(async (fromId: string, toId: string, label: string) => {
+    try {
+      await addCustomRelationship(fromId, toId, label);
+      await loadGraph();
+    } catch (err) {
+      console.error('Failed to add manual relationship', err);
+    }
+  }, [loadGraph]);
+
+  const handleDeleteRelationship = useCallback(async (fromId: string, toId: string, label: string) => {
+    try {
+      await deleteCustomRelationship(fromId, toId, label);
+      await loadGraph();
+    } catch (err) {
+      console.error('Failed to delete relationship', err);
+    }
+  }, [loadGraph]);
 
   const handleUpdateNodePosition = useCallback((_id: string, _x: number, _y: number) => {
     // Position updates are handled in canvas state; this hook is for
@@ -202,6 +221,7 @@ export default function GraphExplorer() {
         onSelectNode={setSelectedNodeId}
         onEditNode={handleEditNode}
         onUpdateNodePosition={handleUpdateNodePosition}
+        onAddRelationship={handleAddRelationship}
       />
 
       {/* Inspector panel — slides in from right on node click */}
@@ -213,6 +233,8 @@ export default function GraphExplorer() {
           onClose={() => setSelectedNodeId(null)}
           onEdit={() => handleEditNode(selectedEntity.id)}
           onDelete={() => handleDeleteNode(selectedEntity.id)}
+          onAddRelationship={handleAddRelationship}
+          onDeleteRelationship={handleDeleteRelationship}
         />
       )}
 

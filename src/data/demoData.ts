@@ -162,6 +162,7 @@ export const demoSources: SourceCategory[] = [
   { id: 'src-erp', name: 'ERP Files', icon: 'database', active: true, locked: false },
   { id: 'src-email', name: 'Email Chains', icon: 'mail', active: true, locked: false },
   { id: 'src-pdf', name: 'PDFs', icon: 'file-text', active: true, locked: false },
+  { id: 'src-google', name: 'Google API Ingestion', icon: 'sync', active: true, locked: false },
   { id: 'src-trade', name: 'Trade Feeds', icon: 'radio', active: false, locked: true, lockedReason: 'Coming in v2' },
 ];
 

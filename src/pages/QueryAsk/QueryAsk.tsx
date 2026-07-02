@@ -217,7 +217,7 @@ export default function QueryAsk() {
 
       {/* Main chat area */}
       <div className="query-container">
-        <MessageList messages={messages} />
+        <MessageList messages={messages} isLoading={isLoading} />
 
         {showSuggestions && (
           <SuggestedChips

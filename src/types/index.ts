@@ -114,14 +114,19 @@ export interface NavTab {
 }
 
 /** LLM provider type */
-export type LlmProvider = 'local' | 'cloud';
+export type LlmProvider = 'local' | 'openai' | 'gemini' | 'groq' | 'custom';
+
+export interface LlmSettings {
+  provider: LlmProvider;
+  model: string;
+  api_key: string;
+  endpoint: string;
+}
 
 /** Settings state */
 export interface AppSettings {
-  llmProvider: LlmProvider;
-  ollamaModel: string;
-  cloudApiKey: string;
-  storagePath: string;
+  llm: LlmSettings;
+  storage_path: string;
 }
 
 /** Graph node position (for force simulation) */

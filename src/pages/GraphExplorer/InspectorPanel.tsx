@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Entity, Relationship } from '../../types';
 import { useNavigate } from 'react-router';
 import MonoText from '../../components/MonoText';
@@ -9,15 +10,25 @@ interface InspectorPanelProps {
   onClose: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  onAddRelationship: (fromId: string, toId: string, label: string) => void;
+  onDeleteRelationship: (fromId: string, toId: string, label: string) => void;
 }
 
-/**
- * InspectorPanel — slides from right on node click (~340px wide).
- * Shows entity details, all direct relationships, audit history link,
- * and "trace blast radius from here" button — direct bridge to Blast Radius tab.
- */
-export default function InspectorPanel({ entity, relationships, allEntities, onClose, onEdit, onDelete }: InspectorPanelProps) {
+export default function InspectorPanel({
+  entity,
+  relationships,
+  allEntities,
+  onClose,
+  onEdit,
+  onDelete,
+  onAddRelationship,
+  onDeleteRelationship,
+}: InspectorPanelProps) {
   const navigate = useNavigate();
+
+  // Form states for creating connection
+  const [targetId, setTargetId] = useState('');
+  const [relLabel, setRelLabel] = useState('ships_to');
 
   // Find relationships connected to this entity
   const connectedRels = relationships.filter(
@@ -27,6 +38,16 @@ export default function InspectorPanel({ entity, relationships, allEntities, onC
   const getEntityName = (id: string) => {
     return allEntities.find(e => e.id === id)?.name || id;
   };
+
+  const handleAddRelSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetId || !relLabel) return;
+    onAddRelationship(entity.id, targetId, relLabel);
+    setTargetId('');
+  };
+
+  // Filter out the current node from potential targets
+  const potentialTargets = allEntities.filter(e => e.id !== entity.id);
 
   return (
     <div className="inspector-panel" onClick={(e) => e.stopPropagation()}>
@@ -72,7 +93,7 @@ export default function InspectorPanel({ entity, relationships, allEntities, onC
           <div className="inspector-panel__section-title">
             Relationships ({connectedRels.length})
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
             {connectedRels.map(rel => {
               const otherId = rel.sourceId === entity.id ? rel.targetId : rel.sourceId;
               const direction = rel.sourceId === entity.id ? '→' : '←';
@@ -93,16 +114,91 @@ export default function InspectorPanel({ entity, relationships, allEntities, onC
                   <span className="text-muted">{direction}</span>
                   <MonoText muted>{rel.label}</MonoText>
                   <span style={{ flex: 1 }} />
-                  <span style={{ fontSize: 12 }}>{getEntityName(otherId)}</span>
-                  {rel.deprecated && (
-                    <span style={{ fontSize: 10, color: 'var(--signal-amber)', fontStyle: 'italic' }}>
-                      deprecated
-                    </span>
-                  )}
+                  <span style={{ fontSize: 12, marginRight: 4 }}>{getEntityName(otherId)}</span>
+                  
+                  {/* Delete connection button */}
+                  <button
+                    onClick={() => onDeleteRelationship(rel.sourceId, rel.targetId, rel.label)}
+                    style={{
+                      border: 'none',
+                      background: 'transparent',
+                      cursor: 'pointer',
+                      color: 'var(--text-muted)',
+                      padding: '2px 4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                    }}
+                    title="Delete connection"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--signal-red)" strokeWidth="2">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
+                  </button>
                 </div>
               );
             })}
           </div>
+
+          {/* Quick Add Connection Form */}
+          <form onSubmit={handleAddRelSubmit} style={{
+            borderTop: '1px solid var(--border-hairline)',
+            paddingTop: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)' }}>
+              Add Connection Manually
+            </div>
+            
+            <div style={{ display: 'flex', gap: 6 }}>
+              <select
+                value={targetId}
+                onChange={(e) => setTargetId(e.target.value)}
+                style={{
+                  flex: 1,
+                  fontSize: 11,
+                  background: 'var(--bg-base)',
+                  border: '1px solid var(--border-hairline)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: 'var(--text-primary)',
+                  padding: '4px 6px',
+                }}
+                required
+              >
+                <option value="">Select target node...</option>
+                {potentialTargets.map(t => (
+                  <option key={t.id} value={t.id}>{t.name} ({t.id})</option>
+                ))}
+              </select>
+
+              <input
+                type="text"
+                value={relLabel}
+                onChange={(e) => setRelLabel(e.target.value)}
+                placeholder="label (e.g. ships_to)"
+                style={{
+                  width: 90,
+                  fontSize: 11,
+                  background: 'var(--bg-base)',
+                  border: '1px solid var(--border-hairline)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: 'var(--text-primary)',
+                  padding: '4px 6px',
+                }}
+                required
+              />
+
+              <button
+                type="submit"
+                className="btn btn--primary"
+                style={{ fontSize: 11, padding: '4px 8px' }}
+              >
+                +
+              </button>
+            </div>
+          </form>
         </div>
 
         {/* Actions */}
