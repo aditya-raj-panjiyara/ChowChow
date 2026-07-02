@@ -10,7 +10,12 @@ use memory_engine::{MemoryEngine, SourceType};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let work_dir = std::env::temp_dir().join("cognee_smoke_test");
-    let _ = std::fs::remove_dir_all(&work_dir);
+    // Wipe previous state but keep downloaded embedding models — they are
+    // immutable, and re-downloading every run trips upstream rate limits.
+    for sub in ["data", "system", "cache", "sessions"] {
+        let _ = std::fs::remove_dir_all(work_dir.join(sub));
+    }
+    let _ = std::fs::remove_file(work_dir.join("cognee.db"));
     std::fs::create_dir_all(&work_dir)?;
 
     println!("[1/4] initializing CogneeMemoryEngine (storage: {})", work_dir.display());
