@@ -1,9 +1,11 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
-import GraphCanvas from './GraphCanvas';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router';
+import GraphCanvas, { type BlastOverlayData } from './GraphCanvas';
 import InspectorPanel from './InspectorPanel';
 import GraphSearch from './GraphSearch';
 import GraphFilters from './GraphFilters';
 import NodeModal from './NodeModal';
+import { analyzeGraph, topCritical } from './graphAnalytics';
 import { demoEntities, demoRelationships } from '../../data/demoData';
 import {
   getGraphSnapshot,
@@ -11,6 +13,8 @@ import {
   deleteCustomNode,
   addCustomRelationship,
   deleteCustomRelationship,
+  simulateBlastRadius,
+  type BlastRadiusResult,
 } from '../../lib/tauri';
 import type { Entity, EntityType, Relationship } from '../../types';
 
@@ -53,7 +57,28 @@ function mapEntityType(raw: string): EntityType {
   return 'supplier';
 }
 
+const usd = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+
+const typeDotColors: Record<EntityType, string> = {
+  supplier: '#5FA88A',
+  port: '#5B8DBF',
+  factory: '#C9A227',
+  material: '#9B7FD4',
+  customer: '#D4A45F',
+};
+
+interface Toast {
+  kind: 'ok' | 'err';
+  text: string;
+}
+
 export default function GraphExplorer() {
+  const navigate = useNavigate();
   const [entities, setEntities] = useState<Entity[]>(demoEntities);
   const [relationships, setRelationships] = useState<Relationship[]>(demoRelationships);
 
@@ -69,9 +94,7 @@ export default function GraphExplorer() {
         id: e.id,
         name: e.name,
         type: mapEntityType(e.entity_type),
-        connectionCount: snapshot.relationships.filter(
-          r => r.from_id === e.id || r.to_id === e.id
-        ).length,
+        connectionCount: snapshot.relationships.filter(r => r.from_id === e.id || r.to_id === e.id).length,
       }));
       const mappedRels: Relationship[] = snapshot.relationships.map((r, i) => ({
         id: `r-${i}`,
@@ -93,48 +116,108 @@ export default function GraphExplorer() {
   }, [loadGraph]);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [activeFilters, setActiveFilters] = useState<EntityType[]>(
-    ['supplier', 'port', 'factory', 'material', 'customer']
-  );
+  const [activeFilters, setActiveFilters] = useState<EntityType[]>(['supplier', 'port', 'factory', 'material', 'customer']);
   const [showDeprecated, setShowDeprecated] = useState(false);
-
   const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null);
   const [editingEntityId, setEditingEntityId] = useState<string | null>(null);
 
-  const selectedEntity = useMemo(
-    () => entities.find(e => e.id === selectedNodeId) || null,
-    [selectedNodeId, entities]
-  );
+  // Feedback toast — no silent async failures.
+  const [toast, setToast] = useState<Toast | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((kind: Toast['kind'], text: string) => {
+    setToast({ kind, text });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 4200);
+  }, []);
 
+  // Drag-to-connect confirmation dialog.
+  const [pendingConnection, setPendingConnection] = useState<{ fromId: string; toId: string } | null>(null);
+  const [pendingLabel, setPendingLabel] = useState('ships_to');
+
+  // Focus request (Critical Dependencies → canvas re-center).
+  const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
+  const [focusNonce, setFocusNonce] = useState(0);
+
+  // Blast radius overlay.
+  const [blastResult, setBlastResult] = useState<BlastRadiusResult | null>(null);
+  const [blastDuration, setBlastDuration] = useState(14);
+  const [blastRunning, setBlastRunning] = useState(false);
+  const [revealedHops, setRevealedHops] = useState(0);
+  const revealTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const [showCriticalPanel, setShowCriticalPanel] = useState(true);
+
+  const analytics = useMemo(() => analyzeGraph(entities, relationships), [entities, relationships]);
+  const criticalNodes = useMemo(() => topCritical(entities, analytics, 5), [entities, analytics]);
+  const spofCount = useMemo(() => [...analytics.values()].filter(a => a.isSpof).length, [analytics]);
+
+  const selectedEntity = useMemo(() => entities.find(e => e.id === selectedNodeId) || null, [selectedNodeId, entities]);
   const editingEntity = useMemo(
     () => (editingEntityId ? entities.find(e => e.id === editingEntityId) || null : null),
-    [editingEntityId, entities]
+    [editingEntityId, entities],
   );
 
-  const filteredEntities = useMemo(
-    () => entities.filter(e => activeFilters.includes(e.type)),
-    [entities, activeFilters]
-  );
-
+  const filteredEntities = useMemo(() => entities.filter(e => activeFilters.includes(e.type)), [entities, activeFilters]);
   const filteredRelationships = useMemo(() => {
     const entityIds = new Set(filteredEntities.map(e => e.id));
-    let rels = relationships.filter(
-      r => entityIds.has(r.sourceId) && entityIds.has(r.targetId)
-    );
-    if (showDeprecated) {
-      rels = rels.filter(r => r.deprecated);
-    }
+    let rels = relationships.filter(r => entityIds.has(r.sourceId) && entityIds.has(r.targetId));
+    if (showDeprecated) rels = rels.filter(r => r.deprecated);
     return rels;
   }, [filteredEntities, relationships, showDeprecated]);
 
-  const handleToggleFilter = (type: EntityType) => {
-    setActiveFilters(prev =>
-      prev.includes(type)
-        ? prev.filter(t => t !== type)
-        : [...prev, type]
-    );
-  };
+  // ── Blast radius ────────────────────────────────────────────
+  const runBlast = useCallback(async (entityId: string, durationDays: number) => {
+    setBlastRunning(true);
+    try {
+      const result = await simulateBlastRadius(entityId, durationDays);
+      setBlastResult(result);
+      setSelectedNodeId(null);
+      // Ripple: reveal one hop every 600ms.
+      setRevealedHops(0);
+      if (revealTimer.current) clearInterval(revealTimer.current);
+      let hop = 0;
+      revealTimer.current = setInterval(() => {
+        hop += 1;
+        setRevealedHops(hop);
+        if (hop >= result.max_hop && revealTimer.current) {
+          clearInterval(revealTimer.current);
+          revealTimer.current = null;
+        }
+      }, 600);
+    } catch (err) {
+      showToast('err', `Blast radius failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBlastRunning(false);
+    }
+  }, [showToast]);
 
+  const clearBlast = useCallback(() => {
+    if (revealTimer.current) clearInterval(revealTimer.current);
+    revealTimer.current = null;
+    setBlastResult(null);
+    setRevealedHops(0);
+  }, []);
+
+  useEffect(() => () => {
+    if (revealTimer.current) clearInterval(revealTimer.current);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+  }, []);
+
+  const blastOverlay: BlastOverlayData | null = useMemo(() => {
+    if (!blastResult) return null;
+    const affected = new Map(
+      blastResult.affected.map(a => [a.id, { hop: a.hop, impact: a.impact_score, severity: a.severity }]),
+    );
+    const pathEdges = new Set<string>();
+    for (const a of blastResult.affected) {
+      for (let i = 0; i < a.path_ids.length - 1; i++) {
+        pathEdges.add(`${a.path_ids[i]}->${a.path_ids[i + 1]}`);
+      }
+    }
+    return { originId: blastResult.origin_id, affected, pathEdges, revealedHops };
+  }, [blastResult, revealedHops]);
+
+  // ── CRUD handlers ───────────────────────────────────────────
   const handleAddNode = useCallback(() => {
     setModalMode('add');
     setEditingEntityId(null);
@@ -149,62 +232,85 @@ export default function GraphExplorer() {
     try {
       await addCustomNode(entity.id, entity.name, entity.type);
       await loadGraph();
+      showToast('ok', `Node "${entity.name}" saved`);
     } catch (err) {
-      console.error('Failed to save custom node', err);
+      showToast('err', `Failed to save node: ${err instanceof Error ? err.message : String(err)}`);
     }
     setModalMode(null);
     setEditingEntityId(null);
-  }, [loadGraph]);
+  }, [loadGraph, showToast]);
 
   const handleDeleteNode = useCallback(async (id: string) => {
     try {
       await deleteCustomNode(id);
       setSelectedNodeId(null);
       await loadGraph();
+      showToast('ok', 'Node deleted');
     } catch (err) {
-      console.error('Failed to delete custom node', err);
+      showToast('err', `Failed to delete node: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [loadGraph]);
+  }, [loadGraph, showToast]);
 
   const handleAddRelationship = useCallback(async (fromId: string, toId: string, label: string) => {
     try {
       await addCustomRelationship(fromId, toId, label);
       await loadGraph();
+      const fromName = entities.find(e => e.id === fromId)?.name ?? fromId;
+      const toName = entities.find(e => e.id === toId)?.name ?? toId;
+      showToast('ok', `Connected ${fromName} → ${toName} (${label})`);
     } catch (err) {
-      console.error('Failed to add manual relationship', err);
+      showToast('err', `Failed to connect: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [loadGraph]);
+  }, [loadGraph, entities, showToast]);
 
   const handleDeleteRelationship = useCallback(async (fromId: string, toId: string, label: string) => {
     try {
       await deleteCustomRelationship(fromId, toId, label);
       await loadGraph();
+      showToast('ok', 'Connection removed');
     } catch (err) {
-      console.error('Failed to delete relationship', err);
+      showToast('err', `Failed to remove connection: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [loadGraph]);
+  }, [loadGraph, showToast]);
 
-  const handleUpdateNodePosition = useCallback((_id: string, _x: number, _y: number) => {
-    // Position updates are handled in canvas state; this hook is for
-    // persisting positions to a backend in the future
+  const handleRequestConnection = useCallback((fromId: string, toId: string) => {
+    setPendingConnection({ fromId, toId });
+    setPendingLabel('ships_to');
   }, []);
+
+  const focusOn = useCallback((id: string) => {
+    setSelectedNodeId(id);
+    setFocusNodeId(id);
+    setFocusNonce(v => v + 1);
+  }, []);
+
+  // Deep link from reasoning-path chips: /graph?entity=<id> focuses that node.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deepLinkedRef = useRef(false);
+  useEffect(() => {
+    const entityParam = searchParams.get('entity');
+    if (!entityParam || deepLinkedRef.current) return;
+    if (entities.some(e => e.id === entityParam)) {
+      deepLinkedRef.current = true;
+      focusOn(entityParam);
+      setSearchParams({}, { replace: true });
+    }
+  }, [entities, searchParams, focusOn, setSearchParams]);
+
+  const criticalCount = blastResult?.affected.filter(a => a.severity === 'critical').length ?? 0;
 
   return (
     <div className="full-bleed">
       {/* Floating toolbar */}
       <div className="graph-search-bar">
-        <GraphSearch onSelectEntity={setSelectedNodeId} />
+        <GraphSearch onSelectEntity={focusOn} />
         <GraphFilters
           activeFilters={activeFilters}
           showDeprecated={showDeprecated}
-          onToggleFilter={handleToggleFilter}
+          onToggleFilter={(type) => setActiveFilters(prev => prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type])}
           onToggleDeprecated={() => setShowDeprecated(!showDeprecated)}
         />
-        <button
-          className="btn btn--primary"
-          onClick={handleAddNode}
-          style={{ whiteSpace: 'nowrap', fontSize: 12, padding: '6px 14px' }}
-        >
+        <button className="btn btn--primary" onClick={handleAddNode} style={{ whiteSpace: 'nowrap', fontSize: 12, padding: '6px 14px' }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="5" x2="12" y2="19" />
             <line x1="5" y1="12" x2="19" y2="12" />
@@ -213,38 +319,225 @@ export default function GraphExplorer() {
         </button>
       </div>
 
-      {/* Interactive canvas */}
+      {/* Canvas */}
       <GraphCanvas
         entities={filteredEntities}
         relationships={filteredRelationships}
         selectedNodeId={selectedNodeId}
+        analytics={analytics}
+        blast={blastOverlay}
+        focusNonce={focusNonce}
+        focusNodeId={focusNodeId}
         onSelectNode={setSelectedNodeId}
         onEditNode={handleEditNode}
-        onUpdateNodePosition={handleUpdateNodePosition}
-        onAddRelationship={handleAddRelationship}
+        onUpdateNodePosition={() => {}}
+        onRequestConnection={handleRequestConnection}
       />
 
-      {/* Inspector panel — slides in from right on node click */}
-      {selectedEntity && (
+      {/* Critical Dependencies panel */}
+      {!blastResult && (
+        <div style={{
+          position: 'absolute', top: 64, left: 16, width: 264,
+          background: 'var(--bg-surface)', border: '1px solid var(--border-hairline)',
+          borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-panel)', overflow: 'hidden',
+        }}>
+          <button
+            onClick={() => setShowCriticalPanel(v => !v)}
+            style={{
+              width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '10px 14px', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-primary)',
+            }}
+          >
+            <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Critical Dependencies
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {spofCount > 0 && (
+                <span className="text-mono-sm" style={{ color: 'var(--signal-amber)', fontSize: 10 }}>
+                  {spofCount} SPOF
+                </span>
+              )}
+              <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>{showCriticalPanel ? '▾' : '▸'}</span>
+            </span>
+          </button>
+          {showCriticalPanel && (
+            <div style={{ borderTop: '1px solid var(--border-hairline)' }}>
+              {criticalNodes.map((node, i) => (
+                <button
+                  key={node.id}
+                  onClick={() => focusOn(node.id)}
+                  style={{
+                    width: '100%', display: 'flex', flexDirection: 'column', gap: 4,
+                    padding: '9px 14px', background: 'transparent', border: 'none',
+                    borderBottom: i < criticalNodes.length - 1 ? '1px solid var(--border-hairline)' : 'none',
+                    cursor: 'pointer', textAlign: 'left',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-raised)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <span className="text-mono-sm" style={{ color: 'var(--text-muted)', fontSize: 10, width: 12 }}>{i + 1}</span>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: typeDotColors[node.type], flexShrink: 0 }} />
+                    <span style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                      {node.name}
+                    </span>
+                    {node.isSpof && <span style={{ fontSize: 9, color: 'var(--signal-amber)' }}>⚠ SPOF</span>}
+                  </span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 19 }}>
+                    <span style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--bg-raised)', overflow: 'hidden' }}>
+                      <span style={{
+                        display: 'block', height: '100%', width: `${Math.max(4, node.criticality * 100)}%`,
+                        background: node.criticality > 0.66 ? 'var(--signal-amber)' : 'var(--accent-cool)',
+                      }} />
+                    </span>
+                    <span className="text-mono-sm" style={{ fontSize: 9.5, color: 'var(--text-muted)', width: 62, textAlign: 'right' }}>
+                      {node.downstreamReach} downstream
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Blast overlay summary bar */}
+      {blastResult && (
+        <div style={{
+          position: 'absolute', top: 60, left: '50%', transform: 'translateX(-50%)',
+          display: 'flex', alignItems: 'center', gap: 18, padding: '10px 18px',
+          background: 'var(--bg-surface)', border: '1px solid var(--signal-amber)',
+          borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-panel)', zIndex: 6,
+          animation: 'fade-in 0.25s ease',
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--signal-amber)', whiteSpace: 'nowrap' }}>
+            ⚡ Blast radius — {blastResult.origin_name}
+          </span>
+          {[
+            { label: 'affected', value: String(blastResult.affected.length) },
+            { label: 'critical', value: String(criticalCount), color: criticalCount > 0 ? 'var(--signal-red)' : undefined },
+            { label: `exposure/${blastResult.duration_days}d`, value: usd.format(blastResult.total_exposure_usd), color: 'var(--signal-amber)' },
+            { label: 'depth', value: `${Math.min(revealedHops, blastResult.max_hop)}/${blastResult.max_hop} hops` },
+          ].map(stat => (
+            <span key={stat.label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+              <span className="text-mono" style={{ fontSize: 14, fontWeight: 700, color: stat.color ?? 'var(--text-primary)' }}>{stat.value}</span>
+              <span style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>{stat.label}</span>
+            </span>
+          ))}
+          <select
+            className="settings-field__select"
+            style={{ width: 92, fontSize: 11, padding: '4px 22px 4px 8px' }}
+            value={blastDuration}
+            onChange={e => {
+              const d = Number(e.target.value);
+              setBlastDuration(d);
+              runBlast(blastResult.origin_id, d);
+            }}
+          >
+            {[7, 14, 30, 60].map(d => <option key={d} value={d}>{d} days</option>)}
+          </select>
+          <button
+            className="btn btn--primary"
+            style={{ fontSize: 11, padding: '5px 12px' }}
+            onClick={() => navigate('/blast-radius', { state: { entityId: blastResult.origin_id, durationDays: blastDuration } })}
+          >
+            Full report →
+          </button>
+          <button
+            onClick={clearBlast}
+            title="Exit blast view"
+            style={{
+              width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'transparent', border: 'none', borderRadius: 'var(--radius-sm)',
+              color: 'var(--text-muted)', cursor: 'pointer', fontSize: 15,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Inspector */}
+      {selectedEntity && !blastResult && (
         <InspectorPanel
           entity={selectedEntity}
           relationships={relationships}
           allEntities={entities}
+          analytics={analytics.get(selectedEntity.id)}
+          blastRunning={blastRunning}
           onClose={() => setSelectedNodeId(null)}
           onEdit={() => handleEditNode(selectedEntity.id)}
           onDelete={() => handleDeleteNode(selectedEntity.id)}
           onAddRelationship={handleAddRelationship}
           onDeleteRelationship={handleDeleteRelationship}
+          onTraceBlastRadius={() => runBlast(selectedEntity.id, blastDuration)}
         />
       )}
 
-      {/* Add/Edit modal */}
+      {/* Add/Edit node modal */}
       {modalMode && (
         <NodeModal
           entity={modalMode === 'edit' ? editingEntity : null}
           onSave={handleSaveNode}
           onClose={() => { setModalMode(null); setEditingEntityId(null); }}
         />
+      )}
+
+      {/* Drag-to-connect confirmation */}
+      {pendingConnection && (
+        <div className="modal-overlay" onClick={() => setPendingConnection(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal__title">New connection</div>
+            <p className="modal__text" style={{ marginBottom: 12 }}>
+              <strong>{entities.find(e => e.id === pendingConnection.fromId)?.name}</strong>
+              {' → '}
+              <strong>{entities.find(e => e.id === pendingConnection.toId)?.name}</strong>
+            </p>
+            <label className="settings-field__label">Relationship label</label>
+            <input
+              className="settings-field__input"
+              autoFocus
+              value={pendingLabel}
+              onChange={e => setPendingLabel(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && pendingLabel.trim()) {
+                  handleAddRelationship(pendingConnection.fromId, pendingConnection.toId, pendingLabel.trim());
+                  setPendingConnection(null);
+                }
+                if (e.key === 'Escape') setPendingConnection(null);
+              }}
+              placeholder="ships_to, supplies, fulfills…"
+            />
+            <div className="modal__actions" style={{ marginTop: 16 }}>
+              <button className="btn btn--ghost" onClick={() => setPendingConnection(null)}>Cancel</button>
+              <button
+                className="btn btn--primary"
+                disabled={!pendingLabel.trim()}
+                style={{ opacity: pendingLabel.trim() ? 1 : 0.5 }}
+                onClick={() => {
+                  handleAddRelationship(pendingConnection.fromId, pendingConnection.toId, pendingLabel.trim());
+                  setPendingConnection(null);
+                }}
+              >
+                Create connection
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Feedback toast */}
+      {toast && (
+        <div style={{
+          position: 'absolute', bottom: 56, left: '50%', transform: 'translateX(-50%)',
+          padding: '9px 16px', borderRadius: 'var(--radius-md)', zIndex: 20,
+          background: 'var(--bg-surface)', boxShadow: 'var(--shadow-panel)',
+          border: `1px solid ${toast.kind === 'ok' ? 'var(--signal-green)' : 'var(--signal-red)'}`,
+          color: toast.kind === 'ok' ? 'var(--signal-green)' : 'var(--signal-red)',
+          fontSize: 12.5, animation: 'fade-in 0.2s ease', maxWidth: 520,
+        }}>
+          {toast.text}
+        </div>
       )}
     </div>
   );

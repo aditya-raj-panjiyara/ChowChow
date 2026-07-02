@@ -2,27 +2,34 @@ import { useState } from 'react';
 import type { Entity, Relationship } from '../../types';
 import { useNavigate } from 'react-router';
 import MonoText from '../../components/MonoText';
+import type { NodeAnalytics } from './graphAnalytics';
 
 interface InspectorPanelProps {
   entity: Entity;
   relationships: Relationship[];
   allEntities: Entity[];
+  analytics?: NodeAnalytics;
+  blastRunning?: boolean;
   onClose: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
   onAddRelationship: (fromId: string, toId: string, label: string) => void;
   onDeleteRelationship: (fromId: string, toId: string, label: string) => void;
+  onTraceBlastRadius: () => void;
 }
 
 export default function InspectorPanel({
   entity,
   relationships,
   allEntities,
+  analytics,
+  blastRunning,
   onClose,
   onEdit,
   onDelete,
   onAddRelationship,
   onDeleteRelationship,
+  onTraceBlastRadius,
 }: InspectorPanelProps) {
   const navigate = useNavigate();
 
@@ -85,6 +92,36 @@ export default function InspectorPanel({
               <span className="text-muted">Connections</span>
               <MonoText>{entity.connectionCount}</MonoText>
             </div>
+            {analytics && (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
+                  <span className="text-muted">Dependency score</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 64, height: 5, borderRadius: 2.5, background: 'var(--bg-raised)', overflow: 'hidden' }}>
+                      <span style={{
+                        display: 'block', height: '100%',
+                        width: `${Math.max(4, analytics.criticality * 100)}%`,
+                        background: analytics.criticality > 0.66 ? 'var(--signal-amber)' : 'var(--accent-cool)',
+                      }} />
+                    </span>
+                    <MonoText>{Math.round(analytics.criticality * 100)}</MonoText>
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                  <span className="text-muted">Downstream reach</span>
+                  <MonoText>{analytics.downstreamReach} nodes</MonoText>
+                </div>
+                {analytics.isSpof && (
+                  <div style={{
+                    padding: '7px 10px', borderRadius: 'var(--radius-sm)', fontSize: 11.5,
+                    background: 'rgba(232,162,61,0.12)', color: 'var(--signal-amber)',
+                    border: '1px solid rgba(232,162,61,0.3)',
+                  }}>
+                    ⚠ Single point of failure — removing this node disconnects part of the network. No structural redundancy exists.
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
 
@@ -223,10 +260,11 @@ export default function InspectorPanel({
           )}
           <button
             className="btn btn--primary"
-            style={{ width: '100%', justifyContent: 'center', marginBottom: 8 }}
-            onClick={() => navigate('/blast-radius')}
+            style={{ width: '100%', justifyContent: 'center', marginBottom: 8, opacity: blastRunning ? 0.6 : 1 }}
+            disabled={blastRunning}
+            onClick={onTraceBlastRadius}
           >
-            Trace blast radius from here
+            {blastRunning ? 'Tracing cascade…' : '⚡ Trace blast radius from here'}
           </button>
           {onDelete && (
             <button

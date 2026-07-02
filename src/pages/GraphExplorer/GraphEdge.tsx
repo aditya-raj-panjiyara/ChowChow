@@ -5,77 +5,77 @@ interface GraphEdgeProps {
   relationship: Relationship;
   sourceNode: SimulationNode | undefined;
   targetNode: SimulationNode | undefined;
+  /** Faded out (blast overlay / hover focus elsewhere) */
+  dimmed: boolean;
+  /** Part of an active blast propagation path */
+  blastPath: boolean;
 }
 
 /**
- * GraphEdge — Bezier curve connection between output→input ports.
- * ComfyUI-style: curves flow from the right (output) port of the source
- * to the left (input) port of the target, with a smooth S-curve.
- * 
- * Deprecated edges shown as amber dashed lines.
+ * GraphEdge — Bezier connection with direction arrowhead.
+ *
+ * States:
+ * - normal: muted curve, slow flow dot
+ * - deprecated: amber dashed (correction audit trail)
+ * - blastPath: amber, thick, fast flow dots — disruption propagation
+ * - dimmed: nearly invisible, keeps layout context
  */
-export default function GraphEdge({ relationship, sourceNode, targetNode }: GraphEdgeProps) {
+export default function GraphEdge({ relationship, sourceNode, targetNode, dimmed, blastPath }: GraphEdgeProps) {
   if (!sourceNode || !targetNode) return null;
 
   const isDeprecated = relationship.deprecated;
 
-  // Source output port position (right side of card, near bottom)
   const sx = sourceNode.x + sourceNode.width;
   const sy = sourceNode.y + sourceNode.height - 13;
-
-  // Target input port position (left side of card, near bottom)
   const tx = targetNode.x;
   const ty = targetNode.y + targetNode.height - 13;
 
-  // Control points for the bezier curve — horizontal S-curve like ComfyUI
   const dx = Math.abs(tx - sx);
   const curvature = Math.max(80, dx * 0.4);
+  const pathData = `M ${sx} ${sy} C ${sx + curvature} ${sy}, ${tx - curvature} ${ty}, ${tx} ${ty}`;
 
-  const c1x = sx + curvature;
-  const c1y = sy;
-  const c2x = tx - curvature;
-  const c2y = ty;
-
-  const pathData = `M ${sx} ${sy} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${tx} ${ty}`;
+  const stroke = blastPath
+    ? 'var(--signal-amber)'
+    : isDeprecated
+      ? 'var(--signal-amber)'
+      : 'var(--text-muted)';
+  const strokeWidth = blastPath ? 2.5 : isDeprecated ? 2 : 1.5;
+  const baseOpacity = blastPath ? 0.95 : isDeprecated ? 0.5 : 0.35;
 
   return (
-    <g>
-      {/* Wider invisible path for easier hovering */}
-      <path
-        d={pathData}
-        fill="none"
-        stroke="transparent"
-        strokeWidth={12}
-        style={{ cursor: 'pointer' }}
-      />
+    <g style={{ opacity: dimmed ? 0.05 : 1, transition: 'opacity 0.35s ease' }}>
+      {/* Hover hit area */}
+      <path d={pathData} fill="none" stroke="transparent" strokeWidth={12} style={{ cursor: 'pointer' }} />
       {/* Visible path */}
       <path
         d={pathData}
         fill="none"
-        stroke={isDeprecated ? 'var(--signal-amber)' : 'var(--text-muted)'}
-        strokeWidth={isDeprecated ? 2 : 1.5}
-        strokeDasharray={isDeprecated ? '8 4' : undefined}
-        opacity={isDeprecated ? 0.5 : 0.35}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        strokeDasharray={isDeprecated && !blastPath ? '8 4' : undefined}
+        opacity={baseOpacity}
+        markerEnd={blastPath ? 'url(#arrow-blast)' : 'url(#arrow-normal)'}
       />
-      {/* Animated flow dots (non-deprecated only) */}
+      {/* Flow dots */}
       {!isDeprecated && (
-        <circle r={2.5} fill="var(--text-muted)" opacity={0.4}>
-          <animateMotion
-            dur="3s"
-            repeatCount="indefinite"
-            path={pathData}
-          />
+        <circle r={blastPath ? 3.5 : 2.5} fill={blastPath ? 'var(--signal-amber)' : 'var(--text-muted)'} opacity={blastPath ? 1 : 0.4}>
+          <animateMotion dur={blastPath ? '1s' : '3s'} repeatCount="indefinite" path={pathData} />
         </circle>
       )}
-      {/* Relationship label at midpoint */}
+      {blastPath && (
+        <circle r={2.5} fill="var(--signal-amber)" opacity={0.7}>
+          <animateMotion dur="1s" begin="0.5s" repeatCount="indefinite" path={pathData} />
+        </circle>
+      )}
+      {/* Label */}
       <text
         x={(sx + tx) / 2}
         y={(sy + ty) / 2 - 8}
         textAnchor="middle"
-        fill="var(--text-muted)"
+        fill={blastPath ? 'var(--signal-amber)' : 'var(--text-muted)'}
         fontSize={9}
         fontFamily="'JetBrains Mono', monospace"
-        opacity={0.5}
+        opacity={blastPath ? 0.9 : 0.5}
         style={{ pointerEvents: 'none' }}
       >
         {relationship.label}

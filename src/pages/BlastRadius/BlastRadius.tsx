@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 import {
   getGraphSnapshot,
   simulateBlastRadius,
@@ -59,13 +60,18 @@ function AffectedCard({ entity }: { entity: BlastAffectedEntity }) {
  * estimated financial exposure, and a prioritized mitigation roadmap.
  */
 export default function BlastRadius() {
+  // Handoff from Graph Explorer's "Full report →": preselect and auto-run.
+  const location = useLocation();
+  const handoff = (location.state ?? null) as { entityId?: string; durationDays?: number } | null;
+
   const [entities, setEntities] = useState<MemoryEntity[]>([]);
   const [graphError, setGraphError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState('');
-  const [durationDays, setDurationDays] = useState(14);
+  const [selectedId, setSelectedId] = useState(handoff?.entityId ?? '');
+  const [durationDays, setDurationDays] = useState(handoff?.durationDays ?? 14);
   const [result, setResult] = useState<BlastRadiusResult | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const autoRanRef = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -81,6 +87,23 @@ export default function BlastRadius() {
         );
       }
     })();
+  }, []);
+
+  // Auto-run once when arriving with a handoff from the Graph Explorer.
+  useEffect(() => {
+    if (!handoff?.entityId || autoRanRef.current) return;
+    autoRanRef.current = true;
+    (async () => {
+      setIsRunning(true);
+      try {
+        setResult(await simulateBlastRadius(handoff.entityId!, handoff.durationDays ?? 14));
+      } catch (err) {
+        setRunError(`Simulation failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setIsRunning(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleRun = async () => {
