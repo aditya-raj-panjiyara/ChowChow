@@ -1,0 +1,5 @@
+supplier,material,origin_warehouse,ship_via,destination,distributor,customer,status
+Leslie Chow Enterprises,Lucky Lotus Powder,Golden Tiger Warehouse Bangkok,Port of Bangkok,Port of Long Beach,Black Doug,Kingsley Syndicate,delayed
+Leslie Chow Enterprises,Counterfeit Casino Chips,Golden Tiger Warehouse Bangkok,Port of Bangkok,Caesars Palace Vault,Black Doug,The Wolfpack,in_transit
+Leslie Chow Enterprises,Stolen Rolex Crates,Tijuana Depot,Marshall Freight Lines,Las Vegas Strip,Black Doug,Kingsley Syndicate,complete
+Leslie Chow Enterprises,Lucky Lotus Powder,Golden Tiger Warehouse Bangkok,Port of Bangkok,Caesars Palace Vault,Doug Billings,The Wolfpack,queued
