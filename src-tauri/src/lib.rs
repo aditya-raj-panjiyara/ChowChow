@@ -48,20 +48,28 @@ pub fn run() {
                 .app_data_dir()
                 .map_err(|e| format!("failed to get app data dir: {e}"))?;
 
-            // Use tauri's async runtime to initialize the database and state
+            // Fast path: SQLite setup is local and quick — do it before the
+            // window shows so commands always have a working engine.
             let handle = app.handle().clone();
-            tauri::async_runtime::block_on(async move {
-                let db = setup_sqlite(&app_data_dir)
-                    .await
-                    .expect("failed to initialize SQLite database");
+            let db = tauri::async_runtime::block_on(setup_sqlite(&app_data_dir))
+                .expect("failed to initialize SQLite database");
 
-                // ── Memory Engine ────────────────────────────────────
-                // Production path: cognee-rs (in-process, LLM via local Ollama).
-                // If cognee init fails (e.g. Ollama not running) we fall back
-                // to the SQLite stub so the app still launches — no silent
-                // failure, the reason is logged to stderr.
-                #[cfg(feature = "cognee")]
-                let memory: Arc<dyn memory_engine::MemoryEngine> =
+            let stub: Arc<dyn memory_engine::MemoryEngine> =
+                Arc::new(memory_sqlite::SqliteStubEngine::new(db.clone()));
+            handle.manage(AppState::new(stub, db));
+
+            // ── Memory Engine ────────────────────────────────────
+            // Production path: cognee-rs (in-process, LLM via local Ollama).
+            // Initialization loads the ONNX embedding model (and downloads it
+            // on the very first run), so it happens in the background — the
+            // window appears immediately on the stub and the real engine is
+            // swapped in once ready. If init fails (e.g. Ollama not running)
+            // the stub stays active — no silent failure, the reason is
+            // logged to stderr.
+            #[cfg(feature = "cognee")]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
                     match memory_cognee::CogneeMemoryEngine::new(
                         memory_cognee::config::CogneeAppConfig {
                             llm_endpoint: "http://localhost:11434/v1".to_string(),
@@ -78,24 +86,22 @@ pub fn run() {
                     .await
                     {
                         Ok(engine) => {
-                            eprintln!("[memory] cognee-rs engine active (Ollama @ localhost:11434)");
-                            Arc::new(engine)
+                            handle
+                                .state::<AppState>()
+                                .set_memory(Arc::new(engine));
+                            eprintln!(
+                                "[memory] cognee-rs engine active (Ollama @ localhost:11434)"
+                            );
                         }
                         Err(e) => {
                             eprintln!(
-                                "[memory] cognee init failed — falling back to SQLite stub. \
+                                "[memory] cognee init failed — staying on SQLite stub. \
                                  Is Ollama running? (`ollama run gemma4`). Error: {e}"
                             );
-                            Arc::new(memory_sqlite::SqliteStubEngine::new(db.clone()))
                         }
-                    };
-
-                #[cfg(not(feature = "cognee"))]
-                let memory: Arc<dyn memory_engine::MemoryEngine> =
-                    Arc::new(memory_sqlite::SqliteStubEngine::new(db.clone()));
-
-                handle.manage(AppState { memory, db });
-            });
+                    }
+                });
+            }
 
             Ok(())
         })

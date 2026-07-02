@@ -15,6 +15,6 @@ pub async fn simulate_blast_radius(
     duration_days: u32,
     state: State<'_, AppState>,
 ) -> Result<BlastRadiusResult, String> {
-    let service = BlastRadiusService::new(state.memory.clone());
+    let service = BlastRadiusService::new(state.memory());
     service.simulate(&entity_id, duration_days).await
 }

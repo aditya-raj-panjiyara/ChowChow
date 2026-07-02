@@ -22,7 +22,7 @@ pub async fn ingest_file(
         .parse()
         .map_err(|e: String| e)?;
 
-    let service = IngestionService::new(state.memory.clone(), state.db.clone());
+    let service = IngestionService::new(state.memory(), state.db.clone());
     service.ingest_file(&path, source).await
 }
 
@@ -31,6 +31,6 @@ pub async fn ingest_file(
 pub async fn get_ingestion_status(
     state: State<'_, AppState>,
 ) -> Result<Vec<IngestionJob>, String> {
-    let service = IngestionService::new(state.memory.clone(), state.db.clone());
+    let service = IngestionService::new(state.memory(), state.db.clone());
     service.list_jobs().await
 }

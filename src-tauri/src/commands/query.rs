@@ -13,6 +13,6 @@ pub async fn ask_question(
     question: String,
     state: State<'_, AppState>,
 ) -> Result<QueryResult, String> {
-    let service = QueryService::new(state.memory.clone());
+    let service = QueryService::new(state.memory());
     service.ask(&question).await
 }

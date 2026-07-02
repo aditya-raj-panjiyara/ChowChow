@@ -19,7 +19,7 @@ pub async fn submit_correction(
     author: String,
     state: State<'_, AppState>,
 ) -> Result<CorrectionEntry, String> {
-    let service = CorrectionService::new(state.memory.clone(), state.db.clone());
+    let service = CorrectionService::new(state.memory(), state.db.clone());
     service.submit(&raw_text, &author).await
 }
 
@@ -29,7 +29,7 @@ pub async fn confirm_correction(
     correction_id: String,
     state: State<'_, AppState>,
 ) -> Result<CorrectionResult, String> {
-    let service = CorrectionService::new(state.memory.clone(), state.db.clone());
+    let service = CorrectionService::new(state.memory(), state.db.clone());
     service.confirm(&correction_id).await
 }
 
@@ -38,6 +38,6 @@ pub async fn confirm_correction(
 pub async fn list_corrections(
     state: State<'_, AppState>,
 ) -> Result<Vec<CorrectionEntry>, String> {
-    let service = CorrectionService::new(state.memory.clone(), state.db.clone());
+    let service = CorrectionService::new(state.memory(), state.db.clone());
     service.list().await
 }

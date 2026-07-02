@@ -14,7 +14,7 @@ pub async fn get_graph_snapshot(
     state: State<'_, AppState>,
 ) -> Result<GraphSnapshot, String> {
     state
-        .memory
+        .memory()
         .get_graph_snapshot()
         .await
         .map_err(|e| e.to_string())
