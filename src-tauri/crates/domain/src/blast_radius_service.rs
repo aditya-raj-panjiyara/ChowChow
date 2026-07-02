@@ -231,15 +231,20 @@ fn severity_for(impact: f32) -> &'static str {
 /// point is relative ranking across the radius, not accounting-grade numbers.
 fn daily_exposure_usd(entity_type: &str) -> f64 {
     let t = entity_type.to_lowercase();
-    if t.contains("customer") {
+    if t.contains("customer") || t.contains("person") || t.contains("buyer") {
         250_000.0
-    } else if t.contains("factory") || t.contains("plant") || t.contains("assembly") {
+    } else if t.contains("factory")
+        || t.contains("plant")
+        || t.contains("assembly")
+        || t.contains("warehouse")
+        || t.contains("facility")
+    {
         180_000.0
-    } else if t.contains("port") || t.contains("hub") || t.contains("route") {
+    } else if t.contains("port") || t.contains("hub") || t.contains("route") || t.contains("location") || t.contains("depot") {
         120_000.0
-    } else if t.contains("supplier") || t.contains("vendor") {
+    } else if t.contains("supplier") || t.contains("vendor") || t.contains("organization") || t.contains("company") {
         90_000.0
-    } else if t.contains("material") || t.contains("component") {
+    } else if t.contains("material") || t.contains("component") || t.contains("product") {
         60_000.0
     } else {
         40_000.0

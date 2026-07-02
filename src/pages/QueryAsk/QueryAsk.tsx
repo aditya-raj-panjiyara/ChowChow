@@ -93,9 +93,9 @@ function getMockResponse(question: string): QueryMessage {
 }
 
 const SUGGESTED_QUESTIONS = [
-  'What happens if Santos port shuts down?',
-  'Show all single-source dependencies',
-  'Which customers have the highest exposure?',
+  'What happens if the Port of Long Beach shuts down?',
+  'Who supplies Lucky Lotus Powder and how does it reach the Wolfpack?',
+  'Show all single-source dependencies in the network',
 ];
 
 /**

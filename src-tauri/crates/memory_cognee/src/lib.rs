@@ -34,10 +34,7 @@ use cognee_lib::cognify::CognifyConfig;
 use cognee_lib::search::{SearchBuilder, SearchOrchestrator};
 
 // Re-export the verb-level API from cognee_lib::prelude
-use cognee_lib::prelude::{
-    remember, recall, improve,
-    RememberResult, RecallResult, ImproveParams,
-};
+use cognee_lib::prelude::{recall, remember, RecallResult, RememberResult};
 
 use cognee_lib::embedding::EmbeddingEngine;
 use cognee_lib::graph::GraphDBTrait;
@@ -265,9 +262,41 @@ impl MemoryEngine for CogneeMemoryEngine {
     ///
     /// Returns the search result text plus the graph traversal path
     /// (from `SearchResponse.graphs`) when available.
+    ///
+    /// Committed corrections (audit nodes in the graph) are injected as an
+    /// authoritative overlay on every query: retrieval alone can still
+    /// surface pre-correction chunks, so the superseding facts ride along
+    /// with the question and win at answer-generation time.
     async fn query(&self, question: &str) -> Result<QueryResult, MemoryError> {
+        let corrections: Vec<String> = self
+            .get_graph_snapshot()
+            .await
+            .map(|s| {
+                s.entities
+                    .iter()
+                    .filter(|e| e.entity_type == "AuditCorrection")
+                    .filter_map(|e| {
+                        e.attributes
+                            .get("raw_text")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let effective_question = if corrections.is_empty() {
+            question.to_string()
+        } else {
+            format!(
+                "Authoritative corrections — these supersede any conflicting \
+                 information in the knowledge base:\n- {}\n\nQuestion: {question}",
+                corrections.join("\n- ")
+            )
+        };
+
         let result: RecallResult = recall(
-            question,
+            &effective_question,
             None,                               // query_type — auto-route
             // cognee-lib 0.1.1 bug: run_graph() hardcodes user_id: None in
             // SearchRequest, so the orchestrator rejects any datasets filter.
@@ -363,8 +392,12 @@ impl MemoryEngine for CogneeMemoryEngine {
 
     /// Direct graph read via `GraphDBTrait::get_graph_data()`.
     ///
-    /// Returns all nodes and edges in the knowledge graph for the
-    /// Graph Explorer visualization.
+    /// Returns the *domain* graph for the Graph Explorer / Blast Radius:
+    /// - cognee stores every extracted entity with `type = "Entity"` and the
+    ///   semantic type ("Person", "Location", "Product"…) on a separate
+    ///   `EntityType` node referenced via the `is_a` property — resolved here.
+    /// - cognee's pipeline plumbing (chunks, documents, summaries, the
+    ///   EntityType nodes themselves) is filtered out along with its edges.
     async fn get_graph_snapshot(&self) -> Result<GraphSnapshot, MemoryError> {
         let (nodes, edges) = self
             .graph_db
@@ -372,14 +405,57 @@ impl MemoryEngine for CogneeMemoryEngine {
             .await
             .map_err(|e| MemoryError::Storage(format!("graph snapshot failed: {e}")))?;
 
+        const PLUMBING_TYPES: [&str; 8] = [
+            "DocumentChunk",
+            "TextChunk",
+            "TextDocument",
+            "TextSummary",
+            "EntityType",
+            "NodeSet",
+            "Table",
+            "TableRow",
+        ];
+
+        // First pass: EntityType node id → semantic type name ("Person", …).
+        let mut type_name_by_id: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for (id, props) in &nodes {
+            let node_type = props
+                .get(&Cow::Borrowed("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if node_type == "EntityType" {
+                if let Some(name) = props.get(&Cow::Borrowed("name")).and_then(|v| v.as_str()) {
+                    type_name_by_id.insert(id.clone(), name.to_string());
+                }
+            }
+        }
+
+        let mut kept_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         let entities: Vec<MemoryEntity> = nodes
             .into_iter()
-            .map(|(id, props)| {
-                let entity_type = props
+            .filter_map(|(id, props)| {
+                let raw_type = props
                     .get(&Cow::Borrowed("type"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown")
                     .to_string();
+
+                if PLUMBING_TYPES.contains(&raw_type.as_str()) {
+                    return None;
+                }
+
+                // Resolve the semantic type via the is_a → EntityType link.
+                let entity_type = if raw_type == "Entity" {
+                    props
+                        .get(&Cow::Borrowed("is_a"))
+                        .and_then(|v| v.as_str())
+                        .and_then(|type_id| type_name_by_id.get(type_id))
+                        .cloned()
+                        .unwrap_or(raw_type)
+                } else {
+                    raw_type
+                };
 
                 let name = props
                     .get(&Cow::Borrowed("name"))
@@ -397,17 +473,21 @@ impl MemoryEngine for CogneeMemoryEngine {
                 )
                 .unwrap_or(serde_json::Value::Null);
 
-                MemoryEntity {
+                kept_ids.insert(id.clone());
+                Some(MemoryEntity {
                     id,
                     entity_type,
                     name,
                     attributes,
-                }
+                })
             })
             .collect();
 
         let relationships: Vec<MemoryRelationship> = edges
             .into_iter()
+            .filter(|(from_id, to_id, _, _)| {
+                kept_ids.contains(from_id) && kept_ids.contains(to_id)
+            })
             .map(|(from_id, to_id, rel_type, props)| {
                 let weight = props
                     .get(&Cow::Borrowed("weight"))
@@ -435,48 +515,133 @@ impl MemoryEngine for CogneeMemoryEngine {
         })
     }
 
-    /// Maps to `cognee_lib::api::improve()` — feedback-driven graph refinement.
+    /// Dynamic learning loop — corrections restructure the graph for real.
     ///
-    /// `ImproveParams` is a structured input (dataset_name, node_name,
-    /// feedback_alpha, session_ids) — not natural-language text.
+    /// cognee's `improve()` only applies *session Q&A feedback* entries, not
+    /// free-text corrections, so this is implemented directly:
+    /// 1. Match graph entities mentioned in the correction text.
+    /// 2. If the correction negates a relationship ("no longer", "stopped"…),
+    ///    mark every edge between the mentioned entities inactive — the
+    ///    Graph Explorer renders these amber-dashed, never deletes them.
+    /// 3. Write a real audit node into the graph for traceability.
+    /// 4. Memify the correction statement itself (`remember()`) so retrieval
+    ///    sees the superseding fact and follow-up answers change.
     async fn apply_correction(
         &self,
         correction: CorrectionIntent,
     ) -> Result<CorrectionResult, MemoryError> {
-        let params = ImproveParams {
-            dataset_name: self.dataset_name.clone(),
-            session_ids: None,
-            node_name: None,
-            owner_id: self.owner_id,
-            tenant_id: None,
-            feedback_alpha: 0.1,
-            extraction_tasks: None,
-            enrichment_tasks: None,
-            data: Some(correction.raw_text),
-            build_global_context_index: false,
-            run_in_background: false,
-            llm: self.llm.clone(),
-            storage: self.storage.clone(),
-            graph_db: self.graph_db.clone(),
-            vector_db: self.vector_db.clone(),
-            embedding_engine: self.embedding_engine.clone(),
-            ontology_resolver: self.ontology_resolver.clone(),
-            db: self.db.clone(),
-            session_store: self.session_store.clone(),
-            session_manager: self.session_manager.clone(),
-            add_pipeline: None,
-            checkpoint_store: self.checkpoint_store.clone(),
-            cognify_config: &self.cognify_config,
-        };
+        let snapshot = self.get_graph_snapshot().await?;
+        let text_lower = correction.raw_text.to_lowercase();
+        let timestamp = chrono::Utc::now().to_rfc3339();
 
-        let result = improve(params)
+        // 1. Entities mentioned in the correction, ordered by appearance.
+        let mut mentioned: Vec<&MemoryEntity> = snapshot
+            .entities
+            .iter()
+            .filter(|e| e.name.len() >= 3 && text_lower.contains(&e.name.to_lowercase()))
+            .collect();
+        mentioned.sort_by_key(|e| text_lower.find(&e.name.to_lowercase()).unwrap_or(usize::MAX));
+
+        // 2. Deprecate contradicted edges (both directions between mentions).
+        const NEGATIONS: [&str; 10] = [
+            "no longer", "not ", "never", "stopped", "stops", "ended",
+            "cut off", "does not", "doesn't", "removed",
+        ];
+        let negation = NEGATIONS.iter().any(|k| text_lower.contains(k));
+
+        let mut edges_deprecated: u32 = 0;
+        if negation && mentioned.len() >= 2 {
+            for a in &mentioned {
+                for b in &mentioned {
+                    if a.id == b.id {
+                        continue;
+                    }
+                    for rel in snapshot
+                        .relationships
+                        .iter()
+                        .filter(|r| r.active && r.from_id == a.id && r.to_id == b.id)
+                    {
+                        for (key, value) in [
+                            ("active", serde_json::json!(false)),
+                            ("deprecated_by", serde_json::json!(correction.author)),
+                            ("deprecated_at", serde_json::json!(timestamp)),
+                        ] {
+                            self.graph_db
+                                .update_edge_property(
+                                    &rel.from_id,
+                                    &rel.to_id,
+                                    &rel.relationship_type,
+                                    key,
+                                    value,
+                                )
+                                .await
+                                .map_err(|e| {
+                                    MemoryError::Storage(format!(
+                                        "edge deprecation failed: {e}"
+                                    ))
+                                })?;
+                        }
+                        edges_deprecated += 1;
+                    }
+                }
+            }
+        }
+
+        // 3. Audit node — lives in the graph itself, never deleted.
+        let audit_node_id = format!("audit-{}", Uuid::new_v4());
+        self.graph_db
+            .add_node_raw(serde_json::json!({
+                "id": audit_node_id,
+                "name": format!("Correction by {}", correction.author),
+                "type": "AuditCorrection",
+                "raw_text": correction.raw_text,
+                "author": correction.author,
+                "timestamp": timestamp,
+                "edges_deprecated": edges_deprecated,
+            }))
             .await
-            .map_err(|e| MemoryError::Storage(e.to_string()))?;
+            .map_err(|e| MemoryError::Storage(format!("audit node creation failed: {e}")))?;
+
+        // 4. Memify the superseding fact so retrieval reflects the correction.
+        let corrective_statement = format!(
+            "CORRECTION ({timestamp}, recorded by {}): {}. \
+             This correction supersedes and deprecates any earlier statement \
+             that contradicts it.",
+            correction.author, correction.raw_text
+        );
+        let result: RememberResult = remember(
+            vec![DataInput::Text(corrective_statement)],
+            &self.dataset_name,
+            None,
+            true,
+            self.owner_id,
+            None,
+            self.add_pipeline.clone(),
+            self.llm.clone(),
+            self.storage.clone(),
+            self.graph_db.clone(),
+            self.vector_db.clone(),
+            self.embedding_engine.clone(),
+            self.db.clone(),
+            self.session_store.clone(),
+            self.session_manager.clone(),
+            self.checkpoint_store.clone(),
+            self.ontology_resolver.clone(),
+            self.cognify_config.clone(),
+        )
+        .await
+        .map_err(|e| MemoryError::Storage(format!("correction memify failed: {e}")))?;
+
+        let edges_created = result
+            .cognify_result
+            .as_ref()
+            .map(|cr| cr.edges.len() as u32)
+            .unwrap_or(0);
 
         Ok(CorrectionResult {
-            edges_created: result.feedback_entries_applied as u32,
-            edges_deprecated: 0,
-            audit_node_id: Uuid::new_v4().to_string(),
+            edges_created,
+            edges_deprecated,
+            audit_node_id,
         })
     }
 }

@@ -8,16 +8,47 @@ import { demoEntities, demoRelationships } from '../../data/demoData';
 import { getGraphSnapshot } from '../../lib/tauri';
 import type { Entity, EntityType, Relationship } from '../../types';
 
+// Maps both the app's domain types and cognee's semantic types
+// ("Person", "Location", "Product", "Organization"…) onto the fixed
+// five-color palette.
 const ENTITY_TYPE_MAP: Record<string, EntityType> = {
   supplier: 'supplier',
+  vendor: 'supplier',
+  organization: 'supplier',
+  company: 'supplier',
+  business: 'supplier',
+  distributor: 'supplier',
   port: 'port',
+  location: 'port',
+  place: 'port',
+  city: 'port',
+  depot: 'port',
+  route: 'port',
   factory: 'factory',
+  warehouse: 'factory',
+  facility: 'factory',
+  plant: 'factory',
+  building: 'factory',
   material: 'material',
+  product: 'material',
+  item: 'material',
+  goods: 'material',
+  substance: 'material',
   customer: 'customer',
+  person: 'customer',
+  people: 'customer',
+  group: 'customer',
+  buyer: 'customer',
 };
 
 function mapEntityType(raw: string): EntityType {
-  return ENTITY_TYPE_MAP[raw.toLowerCase()] ?? 'supplier';
+  const key = raw.toLowerCase();
+  if (ENTITY_TYPE_MAP[key]) return ENTITY_TYPE_MAP[key];
+  // Substring match handles compound labels like "Criminal Organization".
+  for (const [fragment, mapped] of Object.entries(ENTITY_TYPE_MAP)) {
+    if (key.includes(fragment)) return mapped;
+  }
+  return 'supplier';
 }
 
 /**

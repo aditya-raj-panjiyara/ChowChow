@@ -6160,6 +6160,7 @@ name = "memory_cognee"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "cognee-lib",
  "cognee-session",
  "memory_engine",
