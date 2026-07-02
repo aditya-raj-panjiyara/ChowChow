@@ -64,13 +64,56 @@ pub fn apply_env(config: &CogneeAppConfig) {
         std::env::set_var("LLM_MODEL", &config.llm_model);
         std::env::set_var("LLM_API_KEY", &config.llm_api_key);
 
-        // Embedding — config.rs:374
+        // Embedding
         std::env::set_var("EMBEDDING_PROVIDER", &config.embedding_provider);
 
-        // Data root — config.rs:413
+        if config.embedding_provider == "onnx" {
+            // The in-process ONNX engine only knows these model names
+            // (cognee-embedding onnx.rs::with_auto_download). Without an
+            // explicit EMBEDDING_MODEL, Settings keeps the OpenAI default
+            // ("text-embedding-3-small") and ONNX init fails.
+            std::env::set_var("EMBEDDING_MODEL", "bge-small-en-v1.5");
+            std::env::set_var("EMBEDDING_DIMENSIONS", "384");
+            // Absolute paths — the library defaults are CWD-relative
+            // ("./target/models/..."), which breaks in a packaged app.
+            let models_dir = config.storage_root.join("models");
+            std::env::set_var(
+                "EMBEDDING_MODEL_PATH",
+                models_dir
+                    .join("BGE-Small-v1.5-model_quantized.onnx")
+                    .to_string_lossy()
+                    .as_ref(),
+            );
+            std::env::set_var(
+                "EMBEDDING_TOKENIZER_PATH",
+                models_dir
+                    .join("bge-small-tokenizer.json")
+                    .to_string_lossy()
+                    .as_ref(),
+            );
+        }
+
+        // Storage roots — cognee-lib config.rs reads the COGNEE_-prefixed
+        // names; the defaults are CWD-relative dirs we must never use.
         std::env::set_var(
-            "DATA_ROOT_DIRECTORY",
-            config.storage_root.to_string_lossy().as_ref(),
+            "COGNEE_DATA_ROOT_DIRECTORY",
+            config.storage_root.join("data").to_string_lossy().as_ref(),
+        );
+        std::env::set_var(
+            "COGNEE_SYSTEM_ROOT_DIRECTORY",
+            config
+                .storage_root
+                .join("system")
+                .to_string_lossy()
+                .as_ref(),
+        );
+        std::env::set_var(
+            "CACHE_ROOT_DIRECTORY",
+            config
+                .storage_root
+                .join("cache")
+                .to_string_lossy()
+                .as_ref(),
         );
     }
 }
