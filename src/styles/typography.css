@@ -1,0 +1,105 @@
+/* ============================================================
+   Typography — Three-face system
+   
+   Display: Inter Tight — restrained headers, no flourish
+   Body:    Inter — neutral, high legibility at small sizes
+   Mono:    JetBrains Mono — IDs, timestamps, scores, coordinates
+   ============================================================ */
+
+.font-display {
+  font-family: 'Inter Tight', 'Inter', -apple-system, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.font-body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 400;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-weight: 400;
+  font-feature-settings: 'liga' 0;
+}
+
+/* Heading scale */
+.text-display-lg {
+  font-size: 36px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.text-display {
+  font-size: 28px;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+}
+
+.text-heading {
+  font-size: 18px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.text-subheading {
+  font-size: 14px;
+  line-height: 1.4;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.text-body {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.text-body-lg {
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.text-caption {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.text-mono-sm {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.text-mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Color utilities */
+.text-primary {
+  color: var(--text-primary);
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+.text-amber {
+  color: var(--signal-amber);
+}
+
+.text-red {
+  color: var(--signal-red);
+}
+
+.text-green {
+  color: var(--signal-green);
+}
+
+.text-cool {
+  color: var(--accent-cool);
+}

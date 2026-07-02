@@ -1,0 +1,69 @@
+/* ============================================================
+   Design Tokens — Sovereign Supply Chain Risk Engine
+   
+   These tokens define the complete visual identity.
+   - bg-* : background layers (base → surface → raised)
+   - border-* : structural dividers
+   - text-* : typography hierarchy
+   - signal-* : RESERVED for risk/status semantics only
+   - accent-* : interactive elements
+   ============================================================ */
+
+:root {
+  /* Backgrounds — graphite/ink progression */
+  --bg-base: #14171C;
+  --bg-surface: #1B1F26;
+  --bg-raised: #232830;
+
+  /* Borders */
+  --border-hairline: #2E3440;
+
+  /* Text hierarchy */
+  --text-primary: #E8EAED;
+  --text-muted: #8B919C;
+
+  /* Signal colors — semantic use ONLY */
+  --signal-amber: #E8A23D;    /* Risk alerts, active threats */
+  --signal-red: #D9534F;      /* Critical / contract-breach severity */
+  --signal-green: #5FA88A;    /* Resolved, healthy, buffered */
+
+  /* Accent — interactive elements */
+  --accent-cool: #5B8DBF;     /* Links, active selections, focus rings */
+
+  /* Entity type palette — distinct from signal colors */
+  --entity-supplier: #5E9B8A;   /* Teal */
+  --entity-port: #6B87A8;       /* Slate blue */
+  --entity-factory: #8A8078;    /* Warm grey */
+  --entity-material: #8B7BA8;   /* Soft purple */
+  --entity-customer: #B8A472;   /* Muted gold */
+
+  /* Spacing scale */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 100px;
+
+  /* Shadows */
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-raised: 0 4px 16px rgba(0, 0, 0, 0.4);
+
+  /* Z-index layers */
+  --z-base: 1;
+  --z-panel: 10;
+  --z-overlay: 20;
+  --z-modal: 30;
+  --z-topology: 5;
+
+  /* Nav rail dimensions */
+  --nav-rail-width: 220px;
+  --nav-rail-collapsed: 60px;
+  --topology-height: 36px;
+}

@@ -1,0 +1,81 @@
+/* ============================================================
+   Animations — Functional motion only, no decorative flourish
+   ============================================================ */
+
+/* Topology strip pulse — the ONE piece of motion in the app */
+@keyframes pulse-amber {
+
+  0%,
+  100% {
+    opacity: 0.4;
+    filter: drop-shadow(0 0 2px var(--signal-amber));
+  }
+
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 8px var(--signal-amber));
+  }
+}
+
+/* Processing dot pulse */
+@keyframes pulse-dot {
+
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Inspector panel slide-in */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Query history slide-in */
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Fade in — modals, overlays */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* Subtle scale for interactive elements */
+@keyframes scale-in {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
