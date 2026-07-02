@@ -93,6 +93,17 @@ pub fn apply_env(config: &CogneeAppConfig) {
             );
         }
 
+        // Relational DB — the library default is CWD-relative
+        // ("sqlite:./cognee.db"), which would leak a db file into whatever
+        // directory the app was launched from.
+        std::env::set_var(
+            "DATABASE_URL",
+            format!(
+                "sqlite:{}?mode=rwc",
+                config.storage_root.join("cognee.db").display()
+            ),
+        );
+
         // Storage roots — cognee-lib config.rs reads the COGNEE_-prefixed
         // names; the defaults are CWD-relative dirs we must never use.
         std::env::set_var(

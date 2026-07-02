@@ -322,6 +322,29 @@ impl MemoryEngine for CogneeMemoryEngine {
             }
         }
 
+        // GRAPH_COMPLETION answers don't always carry traversal data in the
+        // response. Fall back to deriving the path from graph entities that
+        // the answer actually mentions, ordered by first appearance.
+        if reasoning_path.is_empty() && !result.items.is_empty() {
+            if let Ok(snapshot) = self.get_graph_snapshot().await {
+                let answer_lower = answer.to_lowercase();
+                let mut mentioned: Vec<(usize, MemoryEntity)> = snapshot
+                    .entities
+                    .into_iter()
+                    .filter(|e| e.name.len() >= 3)
+                    .filter_map(|e| {
+                        answer_lower.find(&e.name.to_lowercase()).map(|pos| (pos, e))
+                    })
+                    .collect();
+                mentioned.sort_by_key(|(pos, _)| *pos);
+                reasoning_path = mentioned
+                    .into_iter()
+                    .map(|(_, e)| e)
+                    .take(8)
+                    .collect();
+            }
+        }
+
         // Derive confidence from result quality
         let confidence = if result.items.is_empty() {
             ConfidenceLevel::Low
