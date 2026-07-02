@@ -62,6 +62,12 @@ export default function LlmProviderSection({
     { value: 'mixtral-8x7b-32768', label: 'mixtral-8x7b-32768' },
   ];
 
+  const anthropicModels = [
+    { value: 'claude-3-5-sonnet-latest', label: 'claude-3-5-sonnet-latest (Recommended)' },
+    { value: 'claude-3-5-haiku-latest', label: 'claude-3-5-haiku-latest (Fast)' },
+    { value: 'claude-3-opus-latest', label: 'claude-3-opus-latest (High intelligence)' },
+  ];
+
   const showApiKey = provider !== 'local';
   const showEndpoint = provider === 'custom' || provider === 'local';
 
@@ -89,11 +95,12 @@ export default function LlmProviderSection({
       <div className="settings-field">
         <label className="settings-field__label">Select Provider</label>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-sm)' }}>
-          {(['local', 'gemini', 'openai', 'groq', 'custom'] as LlmProvider[]).map((p) => {
+          {(['local', 'gemini', 'openai', 'anthropic', 'groq', 'custom'] as LlmProvider[]).map((p) => {
             const labels: Record<LlmProvider, string> = {
               local: 'Local (Ollama)',
               gemini: 'Google Gemini',
               openai: 'OpenAI',
+              anthropic: 'Anthropic Claude',
               groq: 'Groq',
               custom: 'Custom OpenAI-Compatible',
             };
@@ -178,6 +185,12 @@ export default function LlmProviderSection({
               ))}
             {provider === 'groq' &&
               groqModels.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            {provider === 'anthropic' &&
+              anthropicModels.map((m) => (
                 <option key={m.value} value={m.value}>
                   {m.label}
                 </option>

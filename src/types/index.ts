@@ -114,7 +114,7 @@ export interface NavTab {
 }
 
 /** LLM provider type */
-export type LlmProvider = 'local' | 'openai' | 'gemini' | 'groq' | 'custom';
+export type LlmProvider = 'local' | 'openai' | 'gemini' | 'groq' | 'custom' | 'anthropic';
 
 export interface LlmSettings {
   provider: LlmProvider;

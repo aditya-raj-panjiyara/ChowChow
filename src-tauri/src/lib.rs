@@ -58,6 +58,9 @@ pub fn run() {
                 Arc::new(memory_sqlite::SqliteStubEngine::new(db.clone()));
             handle.manage(AppState::new(stub, db));
 
+            // Start local Anthropic proxy server
+            commands::settings::start_proxy_server(handle.clone());
+
             // ── Memory Engine ────────────────────────────────────
             // Production path: cognee-rs (in-process, LLM via local Ollama).
             // Initialization loads the ONNX embedding model (and downloads it
@@ -84,6 +87,8 @@ pub fn run() {
                         "https://generativelanguage.googleapis.com/v1beta/openai/".to_string()
                     } else if settings.llm.provider == "groq" {
                         "https://api.groq.com/openai/v1".to_string()
+                    } else if settings.llm.provider == "anthropic" {
+                        "http://127.0.0.1:11430/v1".to_string()
                     } else {
                         settings.llm.endpoint.clone()
                     };
