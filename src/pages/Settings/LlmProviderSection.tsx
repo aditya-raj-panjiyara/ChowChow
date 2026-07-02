@@ -8,6 +8,7 @@ interface LlmProviderSectionProps {
 }
 
 const OLLAMA_MODELS = [
+  'gemma4',
   'llama3.1:8b',
   'llama3.1:70b',
   'mistral:7b',
