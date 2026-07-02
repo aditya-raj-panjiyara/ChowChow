@@ -182,8 +182,8 @@ export const navTabs: NavTab[] = [
   { id: 'ingestion', label: 'Ingestion', path: '/ingestion', icon: 'upload' },
   { id: 'graph-explorer', label: 'Graph Explorer', path: '/graph', icon: 'share-2' },
   { id: 'query-ask', label: 'Query / Ask', path: '/query', icon: 'message-circle' },
-  { id: 'blast-radius', label: 'Blast Radius', path: '/blast-radius', icon: 'zap', locked: true, lockedBadge: 'v2' },
-  { id: 'corrections-log', label: 'Corrections Log', path: '/corrections', icon: 'check-circle', locked: true, lockedBadge: 'v2' },
+  { id: 'blast-radius', label: 'Blast Radius', path: '/blast-radius', icon: 'zap' },
+  { id: 'corrections-log', label: 'Corrections Log', path: '/corrections', icon: 'check-circle' },
   { id: 'settings', label: 'Settings', path: '/settings', icon: 'settings' },
 ];
 

@@ -7,6 +7,7 @@
 //! the underlying engine is the SQLite stub or cognee-rs.
 
 pub mod alert_service;
+pub mod blast_radius_service;
 pub mod correction_service;
 pub mod ingestion_service;
 pub mod query_service;

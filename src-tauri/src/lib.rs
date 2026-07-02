@@ -56,20 +56,39 @@ pub fn run() {
                     .expect("failed to initialize SQLite database");
 
                 // ── Memory Engine ────────────────────────────────────
-                // Swap this line when cognee-rs is ready — nothing else changes.
+                // Production path: cognee-rs (in-process, LLM via local Ollama).
+                // If cognee init fails (e.g. Ollama not running) we fall back
+                // to the SQLite stub so the app still launches — no silent
+                // failure, the reason is logged to stderr.
                 #[cfg(feature = "cognee")]
-                let memory: Arc<dyn memory_engine::MemoryEngine> = Arc::new(
-                    memory_cognee::CogneeMemoryEngine::new(memory_cognee::config::CogneeAppConfig {
-                        llm_endpoint: "http://localhost:11434/v1".to_string(),
-                        llm_model: "gemma4".to_string(),
-                        llm_api_key: "not-needed".to_string(),
-                        embedding_provider: "ollama".to_string(),
-                        storage_root: app_data_dir.join("cognee_data"),
-                        dataset_name: "supply_chain_main".to_string(),
-                    })
+                let memory: Arc<dyn memory_engine::MemoryEngine> =
+                    match memory_cognee::CogneeMemoryEngine::new(
+                        memory_cognee::config::CogneeAppConfig {
+                            llm_endpoint: "http://localhost:11434/v1".to_string(),
+                            llm_model: "gemma4".to_string(),
+                            llm_api_key: "not-needed".to_string(),
+                            // "onnx" runs embeddings in-process (BGE-Small).
+                            // The local Ollama build serves completions only —
+                            // its llama-server runs without `--embeddings`.
+                            embedding_provider: "onnx".to_string(),
+                            storage_root: app_data_dir.join("cognee_data"),
+                            dataset_name: "supply_chain_main".to_string(),
+                        },
+                    )
                     .await
-                    .expect("failed to init cognee-rs — is Ollama running? (start it with `ollama run gemma4` first)")
-                );
+                    {
+                        Ok(engine) => {
+                            eprintln!("[memory] cognee-rs engine active (Ollama @ localhost:11434)");
+                            Arc::new(engine)
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[memory] cognee init failed — falling back to SQLite stub. \
+                                 Is Ollama running? (`ollama run gemma4`). Error: {e}"
+                            );
+                            Arc::new(memory_sqlite::SqliteStubEngine::new(db.clone()))
+                        }
+                    };
 
                 #[cfg(not(feature = "cognee"))]
                 let memory: Arc<dyn memory_engine::MemoryEngine> =
@@ -88,6 +107,7 @@ pub fn run() {
             commands::corrections::submit_correction,
             commands::corrections::confirm_correction,
             commands::corrections::list_corrections,
+            commands::blast_radius::simulate_blast_radius,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

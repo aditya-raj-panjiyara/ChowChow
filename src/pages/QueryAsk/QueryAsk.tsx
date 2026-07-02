@@ -3,10 +3,9 @@ import MessageList from './MessageList';
 import QueryInput from './QueryInput';
 import SuggestedChips from './SuggestedChips';
 import QueryHistory from './QueryHistory';
-import { demoQueries } from '../../data/demoData';
 import type { QueryMessage, ConfidenceLevel } from '../../types';
 
-const USE_MOCK = true;
+const USE_MOCK = false;
 
 const MOCK_RESPONSES: Array<{ keywords: string[]; response: QueryMessage }> = [
   {
@@ -105,7 +104,7 @@ const SUGGESTED_QUESTIONS = [
  * Max 760px centered — reading-width discipline for text-heavy content.
  */
 export default function QueryAsk() {
-  const [messages, setMessages] = useState<QueryMessage[]>(demoQueries);
+  const [messages, setMessages] = useState<QueryMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(true);
   const [showHistory, setShowHistory] = useState(false);

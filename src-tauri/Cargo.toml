@@ -41,9 +41,10 @@ memory_engine = { path = "crates/memory_engine" }
 memory_sqlite = { path = "crates/memory_sqlite" }
 domain = { path = "crates/domain" }
 
-# Feature-gated: cognee-rs scaffold (compiles but all methods are todo!())
+# Feature-gated: cognee-rs production engine (default-on; falls back to the
+# SQLite stub at runtime if Ollama/cognee init fails)
 memory_cognee = { path = "crates/memory_cognee", optional = true }
 
 [features]
-default = []
+default = ["cognee"]
 cognee = ["dep:memory_cognee"]

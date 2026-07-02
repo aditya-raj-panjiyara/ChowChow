@@ -37,7 +37,7 @@ impl Default for CogneeAppConfig {
             llm_endpoint: "http://localhost:11434/v1".to_string(),
             llm_model: "gemma4".to_string(),
             llm_api_key: "not-needed".to_string(),
-            embedding_provider: "ollama".to_string(),
+            embedding_provider: "onnx".to_string(),
             storage_root: PathBuf::from("./.data_storage"),
             dataset_name: "supply_chain_main".to_string(),
         }

@@ -56,6 +56,37 @@ export interface CorrectionResult {
   audit_node_id: string;
 }
 
+export interface BlastAffectedEntity {
+  id: string;
+  name: string;
+  entity_type: string;
+  hop: number;
+  impact_score: number;
+  severity: 'critical' | 'elevated' | 'watch';
+  path_ids: string[];
+  path_names: string[];
+  estimated_exposure_usd: number;
+  buffer_days: number;
+}
+
+export interface MitigationStep {
+  priority: number;
+  action: string;
+  target_entity_id: string;
+  target_entity_name: string;
+}
+
+export interface BlastRadiusResult {
+  origin_id: string;
+  origin_name: string;
+  origin_type: string;
+  duration_days: number;
+  affected: BlastAffectedEntity[];
+  total_exposure_usd: number;
+  max_hop: number;
+  mitigations: MitigationStep[];
+}
+
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
 export async function ingestFile(path: string, sourceType: string): Promise<IngestionJob> {
@@ -84,6 +115,13 @@ export async function confirmCorrection(correctionId: string): Promise<Correctio
 
 export async function listCorrections(): Promise<CorrectionEntry[]> {
   return invoke('list_corrections');
+}
+
+export async function simulateBlastRadius(
+  entityId: string,
+  durationDays: number,
+): Promise<BlastRadiusResult> {
+  return invoke('simulate_blast_radius', { entityId, durationDays });
 }
 
 // ─── File Dialog ──────────────────────────────────────────────────────────────
