@@ -10,7 +10,7 @@ import type { LlmProvider } from '../../types';
  */
 export default function Settings() {
   const [provider, setProvider] = useState<LlmProvider>('local');
-  const [ollamaModel, setOllamaModel] = useState('llama3.1:8b');
+  const [ollamaModel, setOllamaModel] = useState('gemma4');
   const [cloudApiKey, setCloudApiKey] = useState('');
   const [storagePath, setStoragePath] = useState('~/sovereign-engine/data');
 
