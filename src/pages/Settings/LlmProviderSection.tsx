@@ -28,21 +28,23 @@ export default function LlmProviderSection({
   // Recommendations based on CPU architecture
   const localModels = isAppleSilicon
     ? [
-        { value: 'llama3.1:8b', label: 'llama3.1:8b (Recommended - Apple Silicon Optimal)' },
-        { value: 'qwen2.5:7b', label: 'qwen2.5:7b (Excellent balance)' },
-        { value: 'mistral:7b', label: 'mistral:7b (Good generalist)' },
-        { value: 'llama3.2:3b', label: 'llama3.2:3b (Ultra-fast, lightweight)' },
-        { value: 'gemma2:2b', label: 'gemma2:2b (Very lightweight)' },
-        { value: 'llama3.1:70b', label: 'llama3.1:70b (Heavyweight - requires 32GB+ RAM)' },
-      ]
+      { value: 'llama3.1:8b', label: 'llama3.1:8b (Recommended - Apple Silicon Optimal)' },
+      { value: 'qwen2.5:7b', label: 'qwen2.5:7b (Excellent balance)' },
+      { value: 'mistral:7b', label: 'mistral:7b (Good generalist)' },
+      { value: 'llama3.2:3b', label: 'llama3.2:3b (Ultra-fast, lightweight)' },
+      { value: 'gemma2:2b', label: 'gemma2:2b (Very lightweight)' },
+      { value: 'llama3.1:70b', label: 'llama3.1:70b (Heavyweight - requires 32GB+ RAM)' },
+      { value: 'gemma4', label: 'gemma4 (Recommended - Instant replies)' },
+    ]
     : [
-        { value: 'llama3.2:3b', label: 'llama3.2:3b (Recommended - Intel/PC Fast)' },
-        { value: 'gemma2:2b', label: 'gemma2:2b (Recommended - Very lightweight)' },
-        { value: 'phi3:3.8b', label: 'phi3:3.8b (Good fast alternative)' },
-        { value: 'qwen2.5:3b', label: 'qwen2.5:3b (Excellent small model)' },
-        { value: 'llama3.1:8b', label: 'llama3.1:8b (Medium - slower on Intel without GPU)' },
-        { value: 'mixtral:8x7b', label: 'mixtral:8x7b (Heavyweight - requires 32GB+ RAM)' },
-      ];
+      { value: 'llama3.2:3b', label: 'llama3.2:3b (Recommended - Intel/PC Fast)' },
+      { value: 'gemma2:2b', label: 'gemma2:2b (Recommended - Very lightweight)' },
+      { value: 'phi3:3.8b', label: 'phi3:3.8b (Good fast alternative)' },
+      { value: 'qwen2.5:3b', label: 'qwen2.5:3b (Excellent small model)' },
+      { value: 'llama3.1:8b', label: 'llama3.1:8b (Medium - slower on Intel without GPU)' },
+      { value: 'mixtral:8x7b', label: 'mixtral:8x7b (Heavyweight - requires 32GB+ RAM)' },
+      { value: 'gemma4', label: 'gemma4 (Recommended - Instant replies)' },
+    ];
 
   const openaiModels = [
     { value: 'gpt-4o-mini', label: 'gpt-4o-mini (Recommended - Fast & cost-effective)' },
@@ -52,6 +54,7 @@ export default function LlmProviderSection({
 
   const geminiModels = [
     { value: 'gemini-1.5-flash', label: 'gemini-1.5-flash (Recommended - Instant replies)' },
+    { value: 'gemma4', label: 'gemma4 (Recommended - Instant replies)' },
     { value: 'gemini-1.5-pro', label: 'gemini-1.5-pro (High intelligence)' },
     { value: 'gemini-2.0-flash', label: 'gemini-2.0-flash (Next-gen)' },
   ];

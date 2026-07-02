@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router';
 import type { Alert } from '../../types';
 import SeverityDot from '../../components/SeverityDot';
 import MonoText from '../../components/MonoText';
@@ -13,6 +14,7 @@ interface AlertRowProps {
  */
 export default function AlertRow({ alert }: AlertRowProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const navigate = useNavigate();
 
   const formatTimestamp = (ts: string) => {
     const d = new Date(ts);
@@ -41,6 +43,26 @@ export default function AlertRow({ alert }: AlertRowProps) {
                 <MonoText>{entity}</MonoText>
               </div>
             ))}
+          </div>
+        )}
+        {isExpanded && alert.suggestedCorrection && (
+          <div className="alert-row__expand">
+            <div style={{ marginBottom: 6, fontWeight: 500, color: 'var(--text-primary)' }}>
+              Suggested correction:
+            </div>
+            <div style={{ fontStyle: 'italic', marginBottom: 8 }}>
+              “{alert.suggestedCorrection}”
+            </div>
+            <button
+              className="btn btn--primary"
+              style={{ fontSize: 11, padding: '4px 12px' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate('/corrections', { state: { draft: alert.suggestedCorrection, author: 'Drift Sentinel' } });
+              }}
+            >
+              Review & apply correction →
+            </button>
           </div>
         )}
       </div>

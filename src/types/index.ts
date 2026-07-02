@@ -42,6 +42,8 @@ export interface Alert {
   timestamp: string;
   /** Downstream entities affected */
   downstreamEntities?: string[];
+  /** Drift Sentinel: ready-to-apply correction text */
+  suggestedCorrection?: string;
 }
 
 /** Activity feed item */

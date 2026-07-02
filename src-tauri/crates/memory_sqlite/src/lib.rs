@@ -35,6 +35,19 @@ impl SqliteStubEngine {
         sqlx::query(include_str!("../migrations/001_init.sql"))
             .execute(pool)
             .await?;
+
+        // 002 — Drift Sentinel: alerts carry a ready-to-apply correction.
+        // SQLite has no ALTER ... IF NOT EXISTS, so guard via table_info.
+        let has_column: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM pragma_table_info('alerts') WHERE name = 'suggested_correction'",
+        )
+        .fetch_optional(pool)
+        .await?;
+        if has_column.is_none() {
+            sqlx::query("ALTER TABLE alerts ADD COLUMN suggested_correction TEXT")
+                .execute(pool)
+                .await?;
+        }
         Ok(())
     }
 }

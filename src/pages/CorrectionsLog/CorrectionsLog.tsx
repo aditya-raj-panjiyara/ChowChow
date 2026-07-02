@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useLocation } from 'react-router';
 import {
   listCorrections,
   submitCorrection,
@@ -40,9 +41,13 @@ function formatTimestamp(iso: string): string {
  *    audit node ID recorded for traceability.
  */
 export default function CorrectionsLog() {
+  // Handoff from a Drift Sentinel alert: correction text arrives prefilled.
+  const location = useLocation();
+  const handoff = (location.state ?? null) as { draft?: string; author?: string } | null;
+
   const [corrections, setCorrections] = useState<CorrectionEntry[]>([]);
-  const [draft, setDraft] = useState('');
-  const [author, setAuthor] = useState('Risk Officer');
+  const [draft, setDraft] = useState(handoff?.draft ?? '');
+  const [author, setAuthor] = useState(handoff?.author ?? 'Risk Officer');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

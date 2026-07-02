@@ -125,6 +125,19 @@ export async function simulateBlastRadius(
   return invoke('simulate_blast_radius', { entityId, durationDays });
 }
 
+export interface BackendAlert {
+  id: string;
+  severity: 'critical' | 'elevated' | 'stable';
+  entity_id: string | null;
+  description: string;
+  suggested_correction: string | null;
+  created_at: string;
+}
+
+export async function listAlerts(): Promise<BackendAlert[]> {
+  return invoke('list_alerts');
+}
+
 export async function getSettings(): Promise<AppSettings> {
   return invoke('get_settings');
 }

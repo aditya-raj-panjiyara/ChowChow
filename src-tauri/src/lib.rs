@@ -143,6 +143,7 @@ pub fn run() {
             commands::corrections::confirm_correction,
             commands::corrections::list_corrections,
             commands::blast_radius::simulate_blast_radius,
+            commands::alerts::list_alerts,
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::get_system_info,

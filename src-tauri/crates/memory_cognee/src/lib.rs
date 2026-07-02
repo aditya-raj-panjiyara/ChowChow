@@ -38,7 +38,7 @@ use cognee_lib::prelude::{recall, remember, RecallResult, RememberResult};
 
 use cognee_lib::embedding::EmbeddingEngine;
 use cognee_lib::graph::GraphDBTrait;
-use cognee_lib::llm::Llm;
+use cognee_lib::llm::{Llm, Message, MessageRole};
 use cognee_lib::models::DataInput;
 use cognee_lib::ontology::OntologyResolver;
 use cognee_lib::storage::StorageTrait;
@@ -515,17 +515,114 @@ impl MemoryEngine for CogneeMemoryEngine {
         })
     }
 
+    /// Drift Sentinel — cross-examine new content against prior beliefs.
+    ///
+    /// The full-potential move: `recall()`'s semantic retrieval does the
+    /// "what could this contradict?" work by pulling the prior chunks and
+    /// graph context most related to the new document, and the LLM compares
+    /// claim-by-claim. Findings feed Command Center alerts, each carrying a
+    /// ready-to-apply correction for the two-phase learning loop.
+    async fn detect_drift(&self, new_content: &str) -> Result<Vec<DriftFinding>, MemoryError> {
+        let excerpt: String = new_content.chars().take(1800).collect();
+
+        let prompt = format!(
+            "You are a supply-chain state-drift auditor. Compare the NEW DOCUMENT \
+             below against previously known facts from memory. Identify only genuine \
+             factual contradictions (a relationship that changed, a route that moved, \
+             a supplier that was replaced) — not new information that merely adds detail.\n\
+             Respond with ONLY a JSON array, no prose. Each element:\n\
+             {{\"severity\": \"critical\"|\"elevated\", \"entity\": \"<name>\", \
+             \"prior_belief\": \"<what memory says>\", \"new_claim\": \"<what the document says>\", \
+             \"suggested_correction\": \"<one imperative sentence stating the update>\"}}\n\
+             If there are no contradictions, respond with [].\n\n\
+             NEW DOCUMENT:\n{excerpt}"
+        );
+
+        let result: RecallResult = recall(
+            &prompt,
+            None,
+            None,
+            10,
+            true,
+            None,
+            None,
+            &self.search_orchestrator,
+            self.session_store.as_ref().map(|s| s.as_ref()),
+            self.session_manager.as_ref().map(|s| s.as_ref()),
+            None,
+            None,
+        )
+        .await
+        .map_err(|e| MemoryError::QueryFailed(format!("drift scan failed: {e}")))?;
+
+        let raw = result
+            .items
+            .iter()
+            .map(|item| item.content.as_str().map(String::from).unwrap_or_else(|| item.content.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Defensive JSON extraction — take the outermost [...] block.
+        let json_slice = match (raw.find('['), raw.rfind(']')) {
+            (Some(start), Some(end)) if end > start => &raw[start..=end],
+            _ => return Ok(Vec::new()),
+        };
+
+        let parsed: Vec<serde_json::Value> = match serde_json::from_str(json_slice) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[sentinel] could not parse drift JSON (non-fatal): {e}");
+                return Ok(Vec::new());
+            }
+        };
+
+        let str_field = |v: &serde_json::Value, key: &str| -> String {
+            v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+        };
+
+        Ok(parsed
+            .into_iter()
+            .filter_map(|v| {
+                let new_claim = str_field(&v, "new_claim");
+                let prior_belief = str_field(&v, "prior_belief");
+                let suggested = str_field(&v, "suggested_correction");
+                if new_claim.is_empty() && prior_belief.is_empty() {
+                    return None;
+                }
+                let severity = match str_field(&v, "severity").to_lowercase().as_str() {
+                    "critical" => "critical".to_string(),
+                    _ => "elevated".to_string(),
+                };
+                let entity = str_field(&v, "entity");
+                Some(DriftFinding {
+                    severity,
+                    entity_name: if entity.is_empty() { None } else { Some(entity) },
+                    prior_belief,
+                    new_claim: new_claim.clone(),
+                    suggested_correction: if suggested.is_empty() { new_claim } else { suggested },
+                })
+            })
+            .collect())
+    }
+
     /// Dynamic learning loop — corrections restructure the graph for real.
     ///
     /// cognee's `improve()` only applies *session Q&A feedback* entries, not
     /// free-text corrections, so this is implemented directly:
-    /// 1. Match graph entities mentioned in the correction text.
-    /// 2. If the correction negates a relationship ("no longer", "stopped"…),
-    ///    mark every edge between the mentioned entities inactive — the
-    ///    Graph Explorer renders these amber-dashed, never deletes them.
-    /// 3. Write a real audit node into the graph for traceability.
-    /// 4. Memify the correction statement itself (`remember()`) so retrieval
+    /// 1. LLM intent extraction turns the correction into structured graph
+    ///    operations (deprecate pairs + create triples) against the graph's
+    ///    actual entity vocabulary — handles any phrasing ("no longer…",
+    ///    "update X to Y", "Z is replaced by W").
+    /// 2. Deprecated edges are marked inactive (amber-dashed in the UI,
+    ///    never deleted); replacement edges are created, spawning new
+    ///    entities when the correction introduces them.
+    /// 3. A real audit node is written into the graph for traceability.
+    /// 4. The correction statement is memified (`remember()`) so retrieval
     ///    sees the superseding fact and follow-up answers change.
+    ///
+    /// If the LLM extraction fails or returns nothing, a keyword-negation
+    /// heuristic still deprecates edges between mentioned entities, so a
+    /// flaky model degrades gracefully rather than silently doing nothing.
     async fn apply_correction(
         &self,
         correction: CorrectionIntent,
@@ -534,57 +631,142 @@ impl MemoryEngine for CogneeMemoryEngine {
         let text_lower = correction.raw_text.to_lowercase();
         let timestamp = chrono::Utc::now().to_rfc3339();
 
-        // 1. Entities mentioned in the correction, ordered by appearance.
-        let mut mentioned: Vec<&MemoryEntity> = snapshot
+        let graph_entities: Vec<&MemoryEntity> = snapshot
             .entities
             .iter()
-            .filter(|e| e.name.len() >= 3 && text_lower.contains(&e.name.to_lowercase()))
+            .filter(|e| e.entity_type != "AuditCorrection")
             .collect();
-        mentioned.sort_by_key(|e| text_lower.find(&e.name.to_lowercase()).unwrap_or(usize::MAX));
 
-        // 2. Deprecate contradicted edges (both directions between mentions).
-        const NEGATIONS: [&str; 10] = [
-            "no longer", "not ", "never", "stopped", "stops", "ended",
-            "cut off", "does not", "doesn't", "removed",
-        ];
-        let negation = NEGATIONS.iter().any(|k| text_lower.contains(k));
+        // Name → id resolution: exact (case-insensitive) first, then containment.
+        let resolve = |name: &str| -> Option<String> {
+            let lower = name.trim().to_lowercase();
+            if lower.len() < 3 {
+                return None;
+            }
+            graph_entities
+                .iter()
+                .find(|e| e.name.to_lowercase() == lower)
+                .or_else(|| {
+                    graph_entities.iter().find(|e| {
+                        let en = e.name.to_lowercase();
+                        en.contains(&lower) || lower.contains(&en)
+                    })
+                })
+                .map(|e| e.id.clone())
+        };
 
         let mut edges_deprecated: u32 = 0;
-        if negation && mentioned.len() >= 2 {
-            for a in &mentioned {
-                for b in &mentioned {
-                    if a.id == b.id {
-                        continue;
+        let mut edges_created_direct: u32 = 0;
+
+        let mut deprecate_pair = |from_id: &str, to_id: &str| -> Vec<(String, String, String)> {
+            snapshot
+                .relationships
+                .iter()
+                .filter(|r| {
+                    r.active
+                        && ((r.from_id == from_id && r.to_id == to_id)
+                            || (r.from_id == to_id && r.to_id == from_id))
+                })
+                .map(|r| (r.from_id.clone(), r.to_id.clone(), r.relationship_type.clone()))
+                .collect()
+        };
+
+        // 1. LLM intent extraction → structured operations.
+        let ops = self
+            .extract_correction_ops(&correction.raw_text, &graph_entities)
+            .await;
+
+        let mut targets: Vec<(String, String, String)> = Vec::new(); // edges to deprecate
+        let mut creations: Vec<(String, String, String)> = Vec::new(); // from_id, to_id, rel
+
+        match &ops {
+            Some(ops) if !(ops.deprecate.is_empty() && ops.create.is_empty()) => {
+                for pair in &ops.deprecate {
+                    if let (Some(a), Some(b)) = (resolve(&pair.from), resolve(&pair.to)) {
+                        targets.extend(deprecate_pair(&a, &b));
                     }
-                    for rel in snapshot
-                        .relationships
-                        .iter()
-                        .filter(|r| r.active && r.from_id == a.id && r.to_id == b.id)
-                    {
-                        for (key, value) in [
-                            ("active", serde_json::json!(false)),
-                            ("deprecated_by", serde_json::json!(correction.author)),
-                            ("deprecated_at", serde_json::json!(timestamp)),
-                        ] {
-                            self.graph_db
-                                .update_edge_property(
-                                    &rel.from_id,
-                                    &rel.to_id,
-                                    &rel.relationship_type,
-                                    key,
-                                    value,
-                                )
-                                .await
-                                .map_err(|e| {
-                                    MemoryError::Storage(format!(
-                                        "edge deprecation failed: {e}"
-                                    ))
-                                })?;
-                        }
-                        edges_deprecated += 1;
+                }
+                for op in &ops.create {
+                    let from_id = match resolve(&op.from) {
+                        Some(id) => id,
+                        None => self.create_entity_node(&op.from).await?,
+                    };
+                    let to_id = match resolve(&op.to) {
+                        Some(id) => id,
+                        None => self.create_entity_node(&op.to).await?,
+                    };
+                    let rel = if op.relationship.trim().is_empty() {
+                        "related_to".to_string()
+                    } else {
+                        op.relationship.trim().to_lowercase().replace(' ', "_")
+                    };
+                    // Skip if an identical active edge already exists.
+                    let exists = snapshot.relationships.iter().any(|r| {
+                        r.active
+                            && r.from_id == from_id
+                            && r.to_id == to_id
+                            && r.relationship_type == rel
+                    });
+                    if !exists {
+                        creations.push((from_id, to_id, rel));
                     }
                 }
             }
+            _ => {
+                // Fallback: keyword negation between mentioned entities.
+                const NEGATIONS: [&str; 12] = [
+                    "no longer", "not ", "never", "stopped", "stops", "ceased",
+                    "ended", "cut off", "does not", "doesn't", "removed", "replaced",
+                ];
+                if NEGATIONS.iter().any(|k| text_lower.contains(k)) {
+                    let mentioned: Vec<&&MemoryEntity> = graph_entities
+                        .iter()
+                        .filter(|e| e.name.len() >= 3 && text_lower.contains(&e.name.to_lowercase()))
+                        .collect();
+                    for a in &mentioned {
+                        for b in &mentioned {
+                            if a.id != b.id {
+                                targets.extend(deprecate_pair(&a.id, &b.id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2a. Apply deprecations.
+        targets.sort();
+        targets.dedup();
+        for (from_id, to_id, rel_type) in &targets {
+            for (key, value) in [
+                ("active", serde_json::json!(false)),
+                ("deprecated_by", serde_json::json!(correction.author)),
+                ("deprecated_at", serde_json::json!(timestamp)),
+            ] {
+                self.graph_db
+                    .update_edge_property(from_id, to_id, rel_type, key, value)
+                    .await
+                    .map_err(|e| MemoryError::Storage(format!("edge deprecation failed: {e}")))?;
+            }
+            edges_deprecated += 1;
+        }
+
+        // 2b. Apply creations.
+        for (from_id, to_id, rel) in &creations {
+            let props: std::collections::HashMap<Cow<'static, str>, serde_json::Value> = [
+                (Cow::Borrowed("weight"), serde_json::json!(1.0)),
+                (Cow::Borrowed("active"), serde_json::json!(true)),
+                (Cow::Borrowed("source"), serde_json::json!("correction")),
+                (Cow::Borrowed("created_by"), serde_json::json!(correction.author)),
+                (Cow::Borrowed("created_at"), serde_json::json!(timestamp)),
+            ]
+            .into_iter()
+            .collect();
+            self.graph_db
+                .add_edge(from_id, to_id, rel, Some(props))
+                .await
+                .map_err(|e| MemoryError::Storage(format!("edge creation failed: {e}")))?;
+            edges_created_direct += 1;
         }
 
         // 3. Audit node — lives in the graph itself, never deleted.
@@ -632,11 +814,12 @@ impl MemoryEngine for CogneeMemoryEngine {
         .await
         .map_err(|e| MemoryError::Storage(format!("correction memify failed: {e}")))?;
 
-        let edges_created = result
-            .cognify_result
-            .as_ref()
-            .map(|cr| cr.edges.len() as u32)
-            .unwrap_or(0);
+        let edges_created = edges_created_direct
+            + result
+                .cognify_result
+                .as_ref()
+                .map(|cr| cr.edges.len() as u32)
+                .unwrap_or(0);
 
         Ok(CorrectionResult {
             edges_created,

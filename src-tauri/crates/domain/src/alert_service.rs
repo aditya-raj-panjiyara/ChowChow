@@ -1,9 +1,11 @@
 //! Alert Service — manages Command Center alerts.
 //!
 //! Surfaces risk/stability signals to the user. Reads from and writes to the
-//! `alerts` table. In the future, alerts can be auto-generated from ingestion
-//! results (e.g., a new single-source dependency detected).
+//! `alerts` table. The Drift Sentinel writes alerts here after every
+//! ingestion when new content contradicts prior graph beliefs; those alerts
+//! carry a `suggested_correction` ready for the two-phase correction flow.
 
+use memory_engine::DriftFinding;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
@@ -15,6 +17,7 @@ pub struct Alert {
     pub severity: String,
     pub entity_id: Option<String>,
     pub description: String,
+    pub suggested_correction: Option<String>,
     pub created_at: String,
 }
 
@@ -52,18 +55,20 @@ impl AlertService {
         severity: AlertSeverity,
         entity_id: Option<&str>,
         description: &str,
+        suggested_correction: Option<&str>,
     ) -> Result<Alert, String> {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
         sqlx::query(
-            "INSERT INTO alerts (id, severity, entity_id, description, created_at) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO alerts (id, severity, entity_id, description, suggested_correction, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(severity.to_string())
         .bind(entity_id)
         .bind(description)
+        .bind(suggested_correction)
         .bind(&now)
         .execute(&self.db)
         .await
@@ -72,52 +77,52 @@ impl AlertService {
         Ok(Alert {
             id,
             severity: severity.to_string(),
-            entity_id: entity_id.map(|s| s.to_string()),
+            entity_id: entity_id.map(String::from),
             description: description.to_string(),
+            suggested_correction: suggested_correction.map(String::from),
             created_at: now,
         })
     }
 
-    /// List all alerts, most recent first.
-    pub async fn list_alerts(&self) -> Result<Vec<Alert>, String> {
-        let rows: Vec<(String, String, Option<String>, String, String)> = sqlx::query_as(
-            "SELECT id, severity, entity_id, description, created_at \
-             FROM alerts ORDER BY created_at DESC",
+    /// Record a Drift Sentinel finding as an alert.
+    pub async fn record_drift_finding(&self, finding: &DriftFinding) -> Result<Alert, String> {
+        let severity = if finding.severity == "critical" {
+            AlertSeverity::Critical
+        } else {
+            AlertSeverity::Elevated
+        };
+        let description = format!(
+            "State drift detected — memory believed: \"{}\" but new intel says: \"{}\"",
+            finding.prior_belief, finding.new_claim
+        );
+        self.create_alert(
+            severity,
+            finding.entity_name.as_deref(),
+            &description,
+            Some(&finding.suggested_correction),
         )
-        .fetch_all(&self.db)
         .await
-        .map_err(|e| format!("failed to list alerts: {e}"))?;
-
-        Ok(rows
-            .into_iter()
-            .map(|(id, severity, entity_id, description, created_at)| Alert {
-                id,
-                severity,
-                entity_id,
-                description,
-                created_at,
-            })
-            .collect())
     }
 
-    /// List alerts filtered by severity.
-    pub async fn list_by_severity(&self, severity: AlertSeverity) -> Result<Vec<Alert>, String> {
-        let rows: Vec<(String, String, Option<String>, String, String)> = sqlx::query_as(
-            "SELECT id, severity, entity_id, description, created_at \
-             FROM alerts WHERE severity = ? ORDER BY created_at DESC",
-        )
-        .bind(severity.to_string())
-        .fetch_all(&self.db)
-        .await
-        .map_err(|e| format!("failed to list alerts by severity: {e}"))?;
+    /// List all alerts, most recent first.
+    pub async fn list_alerts(&self) -> Result<Vec<Alert>, String> {
+        let rows: Vec<(String, String, Option<String>, String, Option<String>, String)> =
+            sqlx::query_as(
+                "SELECT id, severity, entity_id, description, suggested_correction, created_at \
+                 FROM alerts ORDER BY created_at DESC",
+            )
+            .fetch_all(&self.db)
+            .await
+            .map_err(|e| format!("failed to list alerts: {e}"))?;
 
         Ok(rows
             .into_iter()
-            .map(|(id, severity, entity_id, description, created_at)| Alert {
+            .map(|(id, severity, entity_id, description, suggested_correction, created_at)| Alert {
                 id,
                 severity,
                 entity_id,
                 description,
+                suggested_correction,
                 created_at,
             })
             .collect())

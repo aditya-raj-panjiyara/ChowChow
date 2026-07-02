@@ -114,6 +114,22 @@ pub struct CorrectionResult {
     pub audit_node_id: String,
 }
 
+/// A contradiction between newly ingested content and prior graph beliefs,
+/// found by the Drift Sentinel's cross-examination pass.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DriftFinding {
+    /// "critical" | "elevated"
+    pub severity: String,
+    /// The entity at the center of the conflict, if identifiable.
+    pub entity_name: Option<String>,
+    /// What memory previously believed.
+    pub prior_belief: String,
+    /// What the new document claims.
+    pub new_claim: String,
+    /// Ready-to-apply correction text for the two-phase correction flow.
+    pub suggested_correction: String,
+}
+
 // ─── Error Type ──────────────────────────────────────────────────────────────
 
 #[derive(thiserror::Error, Debug)]
@@ -154,4 +170,11 @@ pub trait MemoryEngine: Send + Sync {
         &self,
         correction: CorrectionIntent,
     ) -> Result<CorrectionResult, MemoryError>;
+
+    /// Cross-examine newly ingested content against prior beliefs and return
+    /// contradictions. Engines without semantic memory return no findings —
+    /// the default implementation — so the stub stays sentinel-silent.
+    async fn detect_drift(&self, _new_content: &str) -> Result<Vec<DriftFinding>, MemoryError> {
+        Ok(Vec::new())
+    }
 }
