@@ -4,6 +4,7 @@ import {
   listCorrections,
   submitCorrection,
   confirmCorrection,
+  rejectCorrection,
   type CorrectionEntry,
 } from '../../lib/tauri';
 import EmptyState from '../../components/EmptyState';
@@ -15,7 +16,7 @@ function CorrectionStatusPill({ status }: { status: string }) {
       ? 'status-pill--complete'
       : status === 'pending'
         ? 'status-pill--processing'
-        : status === 'failed'
+        : status === 'failed' || status === 'rejected'
           ? 'status-pill--failed'
           : 'status-pill--queued';
   return (
@@ -93,13 +94,27 @@ export default function CorrectionsLog() {
       const result = await confirmCorrection(id);
       setNotice(
         `Correction applied — ${result.edges_created} edge(s) created, ` +
-        `${result.edges_deprecated} deprecated. Audit node ${result.audit_node_id}.`,
+        `${result.edges_deprecated} deprecated. Audit node ${result.audit_node_id}. ` +
+        `Deprecated edges now render amber-dashed in the Graph Explorer.`,
       );
       await refresh();
     } catch (err) {
       setError(`Apply failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setConfirmingId(null);
+    }
+  };
+
+  const handleReject = async (id: string) => {
+    if (confirmingId) return;
+    setError(null);
+    setNotice(null);
+    try {
+      await rejectCorrection(id);
+      setNotice('Correction rejected — kept in the log, graph untouched.');
+      await refresh();
+    } catch (err) {
+      setError(`Reject failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -210,18 +225,29 @@ export default function CorrectionsLog() {
                     </td>
                     <td style={{ padding: 'var(--space-sm) var(--space-lg)', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {c.status === 'pending' && (
-                        <button
-                          className="btn btn--primary"
-                          style={{
-                            padding: '4px 12px',
-                            fontSize: 12,
-                            opacity: confirmingId ? 0.5 : 1,
-                          }}
-                          onClick={() => handleConfirm(c.id)}
-                          disabled={confirmingId !== null}
-                        >
-                          {confirmingId === c.id ? 'Applying…' : 'Confirm & Apply'}
-                        </button>
+                        <span style={{ display: 'inline-flex', gap: 6 }}>
+                          <button
+                            className="btn btn--ghost"
+                            style={{ padding: '4px 10px', fontSize: 12, opacity: confirmingId ? 0.5 : 1 }}
+                            onClick={() => handleReject(c.id)}
+                            disabled={confirmingId !== null}
+                          >
+                            Reject
+                          </button>
+                          <button
+                            className="btn btn--primary"
+                            style={{
+                              padding: '4px 12px',
+                              fontSize: 12,
+                              opacity: confirmingId ? 0.5 : 1,
+                            }}
+                            onClick={() => handleConfirm(c.id)}
+                            disabled={confirmingId !== null}
+                            title="Runs LLM intent extraction + graph update — takes ~a minute on the local model"
+                          >
+                            {confirmingId === c.id ? 'Applying (local LLM)…' : 'Confirm & Apply'}
+                          </button>
+                        </span>
                       )}
                     </td>
                   </tr>

@@ -56,11 +56,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let before = engine.query("Who does Black Doug distribute to?").await?;
     println!("      answer: {}", before.answer.chars().take(300).collect::<String>());
 
-    println!("[4/5] apply correction: 'Black Doug no longer distributes to the Kingsley Syndicate'");
+    // Sentinel-style phrasing — no negation keywords. This is the case the
+    // old keyword heuristic missed (0 deprecations); LLM intent extraction
+    // must both deprecate the old edge and create the replacement.
+    println!("[4/5] apply correction: 'Update the primary distributor for the Kingsley Syndicate from Black Doug to Fat Jesus Logistics.'");
     let result = engine
         .apply_correction(CorrectionIntent {
-            raw_text: "Black Doug no longer distributes to the Kingsley Syndicate".to_string(),
-            author: "Risk Officer".to_string(),
+            raw_text: "Update the primary distributor for the Kingsley Syndicate from Black Doug to Fat Jesus Logistics.".to_string(),
+            author: "Drift Sentinel".to_string(),
         })
         .await?;
     println!(
@@ -69,17 +72,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("[5/5] query after correction");
-    let after = engine.query("Does Black Doug still distribute to the Kingsley Syndicate?").await?;
+    let after = engine.query("Who distributes to the Kingsley Syndicate now?").await?;
     println!("      answer: {}", after.answer.chars().take(400).collect::<String>());
 
     let snapshot = engine.get_graph_snapshot().await?;
     let inactive = snapshot.relationships.iter().filter(|r| !r.active).count();
-    println!("      graph: {} edges total, {} deprecated (inactive)", snapshot.relationships.len(), inactive);
+    let fat_jesus = snapshot.entities.iter().find(|e| e.name.to_lowercase().contains("fat jesus"));
+    println!(
+        "      graph: {} edges total, {} deprecated (inactive), replacement entity present: {}",
+        snapshot.relationships.len(),
+        inactive,
+        fat_jesus.is_some()
+    );
 
-    if result.edges_deprecated > 0 || inactive > 0 {
+    if result.edges_deprecated > 0 && fat_jesus.is_some() {
         println!("CORRECTION LOOP VERIFIED");
+    } else if result.edges_deprecated > 0 {
+        println!("PARTIAL: deprecation worked but replacement entity missing");
     } else {
-        println!("WARNING: no edges were deprecated — check entity name matching");
+        println!("WARNING: no edges were deprecated — check intent extraction");
     }
     Ok(())
 }

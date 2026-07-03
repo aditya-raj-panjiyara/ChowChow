@@ -69,6 +69,27 @@ pub fn run() {
             // swapped in once ready. If init fails (e.g. Ollama not running)
             // the stub stays active — no silent failure, the reason is
             // logged to stderr.
+            // ── Cognition Trace forwarder ────────────────────────
+            // Streams every cognee stage / LLM call / embedding batch to the
+            // webview, where the Cognition Trace panel renders it live.
+            #[cfg(feature = "cognee")]
+            {
+                use tauri::Emitter;
+                let trace_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut rx = memory_cognee::trace::subscribe();
+                    loop {
+                        match rx.recv().await {
+                            Ok(event) => {
+                                let _ = trace_handle.emit("cognition-trace", &event);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+            }
+
             #[cfg(feature = "cognee")]
             {
                 let handle = app.handle().clone();
@@ -141,6 +162,7 @@ pub fn run() {
             commands::graph::delete_custom_relationship,
             commands::corrections::submit_correction,
             commands::corrections::confirm_correction,
+            commands::corrections::reject_correction,
             commands::corrections::list_corrections,
             commands::blast_radius::simulate_blast_radius,
             commands::alerts::list_alerts,

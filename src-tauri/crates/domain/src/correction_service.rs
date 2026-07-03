@@ -112,6 +112,25 @@ impl CorrectionService {
         Ok(result)
     }
 
+    /// Reject a pending correction — it stays in the log (audit-preserved)
+    /// but never touches the graph.
+    pub async fn reject(&self, correction_id: &str) -> Result<(), String> {
+        let result = sqlx::query(
+            "UPDATE correction_log SET status = 'rejected' WHERE id = ? AND status = 'pending'",
+        )
+        .bind(correction_id)
+        .execute(&self.db)
+        .await
+        .map_err(|e| format!("failed to reject correction: {e}"))?;
+
+        if result.rows_affected() == 0 {
+            return Err(format!(
+                "correction {correction_id} not found or not pending"
+            ));
+        }
+        Ok(())
+    }
+
     /// List all corrections, most recent first.
     pub async fn list(&self) -> Result<Vec<CorrectionEntry>, String> {
         let rows: Vec<(String, String, String, String, Option<String>, String)> =

@@ -33,6 +33,16 @@ pub async fn confirm_correction(
     service.confirm(&correction_id).await
 }
 
+/// Reject a pending correction (kept in the log, never applied).
+#[tauri::command]
+pub async fn reject_correction(
+    correction_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let service = CorrectionService::new(state.memory(), state.db.clone());
+    service.reject(&correction_id).await
+}
+
 /// List all corrections, most recent first.
 #[tauri::command]
 pub async fn list_corrections(

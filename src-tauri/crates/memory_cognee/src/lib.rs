@@ -17,6 +17,7 @@
 //! file-based (SQLite + Ladybug + LanceDB) inside Tauri's `app_data_dir()`.
 
 pub mod config;
+pub mod trace;
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -125,6 +126,13 @@ impl CogneeMemoryEngine {
                 ))
             })?;
 
+        // Cognition Trace interceptors — wrapped BEFORE the pipelines are
+        // built, so every internal LLM call and embedding batch cognee makes
+        // streams to the UI as a live trace event.
+        let llm: Arc<dyn Llm> = Arc::new(trace::TracedLlm::new(llm));
+        let embedding_engine: Arc<dyn EmbeddingEngine> =
+            Arc::new(trace::TracedEmbedding::new(embedding_engine));
+
         // Construct session store and manager
         let sessions_dir = app_config.storage_root.join("sessions");
         tokio::fs::create_dir_all(&sessions_dir).await.map_err(|e| {
@@ -197,6 +205,107 @@ impl CogneeMemoryEngine {
             search_orchestrator,
         })
     }
+
+    /// LLM intent extraction: turn a free-text correction into structured
+    /// graph operations against the graph's actual entity vocabulary.
+    /// Returns `None` when the model output can't be parsed — callers fall
+    /// back to the keyword heuristic.
+    async fn extract_correction_ops(
+        &self,
+        correction_text: &str,
+        entities: &[&MemoryEntity],
+    ) -> Option<CorrectionOps> {
+        let names = entities
+            .iter()
+            .take(120)
+            .map(|e| format!("- {}", e.name))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let system = "You convert supply-chain correction statements into graph operations. \
+            Respond with ONLY a JSON object, no prose, in exactly this shape:\n\
+            {\"deprecate\": [{\"from\": \"<entity>\", \"to\": \"<entity>\"}], \
+             \"create\": [{\"from\": \"<entity>\", \"to\": \"<entity>\", \"relationship\": \"<snake_case_verb>\"}]}\n\
+            Rules:\n\
+            - deprecate: relationships the correction says are no longer true. \
+              Use ONLY names from KNOWN ENTITIES for both ends; if an end is not listed, omit that pair.\n\
+            - create: new relationships the correction introduces. Names not in \
+              KNOWN ENTITIES are allowed here (new entities will be created).\n\
+            - Direction runs from the provider/source toward the receiver \
+              (supplier → customer, distributor → syndicate, material → port).\n\
+            - If the correction replaces X with Y for target Z: deprecate X→Z and create Y→Z.\n\
+            - relationship is a short snake_case verb phrase like distributes_to, ships_via, supplies.\n\
+            - Use empty arrays when nothing applies.";
+
+        let user = format!("KNOWN ENTITIES:\n{names}\n\nCORRECTION: {correction_text}");
+
+        let response = self
+            .llm
+            .generate(
+                vec![
+                    Message { role: MessageRole::System, content: system.to_string() },
+                    Message { role: MessageRole::User, content: user },
+                ],
+                None,
+            )
+            .await
+            .map_err(|e| eprintln!("[correction] intent extraction LLM call failed: {e}"))
+            .ok()?;
+
+        let raw = response.content;
+        let start = raw.find('{')?;
+        let end = raw.rfind('}')?;
+        match serde_json::from_str::<CorrectionOps>(&raw[start..=end]) {
+            Ok(ops) => Some(ops),
+            Err(e) => {
+                eprintln!("[correction] could not parse intent JSON (falling back): {e}");
+                None
+            }
+        }
+    }
+
+    /// Create a new entity node introduced by a correction (e.g. a
+    /// replacement supplier that wasn't in the graph yet).
+    async fn create_entity_node(&self, name: &str) -> Result<String, MemoryError> {
+        let id = Uuid::new_v4().to_string();
+        self.graph_db
+            .add_node_raw(serde_json::json!({
+                "id": id,
+                "name": name.trim(),
+                "type": "Organization",
+                "source": "correction",
+            }))
+            .await
+            .map_err(|e| MemoryError::Storage(format!("entity creation failed: {e}")))?;
+        Ok(id)
+    }
+}
+
+/// Structured operations extracted from a correction statement.
+#[derive(Debug, serde::Deserialize)]
+struct CorrectionOps {
+    #[serde(default)]
+    deprecate: Vec<PairOp>,
+    #[serde(default)]
+    create: Vec<CreateOp>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PairOp {
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    to: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CreateOp {
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    to: String,
+    #[serde(default)]
+    relationship: String,
 }
 
 #[async_trait]
@@ -210,10 +319,21 @@ impl MemoryEngine for CogneeMemoryEngine {
         path: &str,
         _source_type: SourceType,
     ) -> Result<IngestSummary, MemoryError> {
+        let file_name = std::path::Path::new(path)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string());
+        let op = trace::begin_op(format!("Ingest · {file_name}"));
+
         // Read file content to pass as DataInput::Text
         let content = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| MemoryError::IngestionFailed(format!("cannot read file: {e}")))?;
+        trace::stage("read file", format!("{} chars from {file_name}", content.chars().count()));
+        trace::stage(
+            "remember() pipeline",
+            "add → chunk → cognify (LLM entity extraction) → embed → graph + vector write",
+        );
 
         let data = vec![DataInput::Text(content)];
 
@@ -252,6 +372,10 @@ impl MemoryEngine for CogneeMemoryEngine {
             })
             .unwrap_or((result.items_processed as u32, 0));
 
+        op.finish(format!(
+            "{entities} entities · {relationships} relationships written to the graph"
+        ));
+
         Ok(IngestSummary {
             entities_extracted: entities,
             relationships_extracted: relationships,
@@ -268,6 +392,8 @@ impl MemoryEngine for CogneeMemoryEngine {
     /// surface pre-correction chunks, so the superseding facts ride along
     /// with the question and win at answer-generation time.
     async fn query(&self, question: &str) -> Result<QueryResult, MemoryError> {
+        let op = trace::begin_op(format!("Query · \"{}\"", trace::preview(question, 70)));
+
         let corrections: Vec<String> = self
             .get_graph_snapshot()
             .await
@@ -285,6 +411,15 @@ impl MemoryEngine for CogneeMemoryEngine {
             })
             .unwrap_or_default();
 
+        trace::stage(
+            "correction overlay",
+            if corrections.is_empty() {
+                "no committed corrections to apply".to_string()
+            } else {
+                format!("{} committed correction(s) injected as authoritative context", corrections.len())
+            },
+        );
+
         let effective_question = if corrections.is_empty() {
             question.to_string()
         } else {
@@ -294,6 +429,11 @@ impl MemoryEngine for CogneeMemoryEngine {
                 corrections.join("\n- ")
             )
         };
+
+        trace::stage(
+            "recall() pipeline",
+            "embed question → vector search → graph traversal context → LLM completion",
+        );
 
         let result: RecallResult = recall(
             &effective_question,
@@ -382,6 +522,11 @@ impl MemoryEngine for CogneeMemoryEngine {
         } else {
             ConfidenceLevel::Partial
         };
+
+        op.finish(format!(
+            "answer ready · {} reasoning entities · confidence {confidence:?}",
+            reasoning_path.len()
+        ));
 
         Ok(QueryResult {
             answer,
@@ -523,6 +668,11 @@ impl MemoryEngine for CogneeMemoryEngine {
     /// claim-by-claim. Findings feed Command Center alerts, each carrying a
     /// ready-to-apply correction for the two-phase learning loop.
     async fn detect_drift(&self, new_content: &str) -> Result<Vec<DriftFinding>, MemoryError> {
+        let op = trace::begin_op("Drift Sentinel · cross-examination");
+        trace::stage(
+            "recall() as auditor",
+            "retrieve prior beliefs semantically related to the new content, LLM compares claim-by-claim",
+        );
         let excerpt: String = new_content.chars().take(1800).collect();
 
         let prompt = format!(
@@ -565,13 +715,17 @@ impl MemoryEngine for CogneeMemoryEngine {
         // Defensive JSON extraction — take the outermost [...] block.
         let json_slice = match (raw.find('['), raw.rfind(']')) {
             (Some(start), Some(end)) if end > start => &raw[start..=end],
-            _ => return Ok(Vec::new()),
+            _ => {
+                op.finish("no contradictions found");
+                return Ok(Vec::new());
+            }
         };
 
         let parsed: Vec<serde_json::Value> = match serde_json::from_str(json_slice) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("[sentinel] could not parse drift JSON (non-fatal): {e}");
+                op.finish("model output unparseable — treated as no contradictions");
                 return Ok(Vec::new());
             }
         };
@@ -580,7 +734,7 @@ impl MemoryEngine for CogneeMemoryEngine {
             v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string()
         };
 
-        Ok(parsed
+        let findings: Vec<DriftFinding> = parsed
             .into_iter()
             .filter_map(|v| {
                 let new_claim = str_field(&v, "new_claim");
@@ -602,7 +756,15 @@ impl MemoryEngine for CogneeMemoryEngine {
                     suggested_correction: if suggested.is_empty() { new_claim } else { suggested },
                 })
             })
-            .collect())
+            .collect();
+
+        op.finish(if findings.is_empty() {
+            "no contradictions found".to_string()
+        } else {
+            format!("{} contradiction(s) → Command Center alerts", findings.len())
+        });
+
+        Ok(findings)
     }
 
     /// Dynamic learning loop — corrections restructure the graph for real.
@@ -627,6 +789,10 @@ impl MemoryEngine for CogneeMemoryEngine {
         &self,
         correction: CorrectionIntent,
     ) -> Result<CorrectionResult, MemoryError> {
+        let op = trace::begin_op(format!(
+            "Correction · \"{}\"",
+            trace::preview(&correction.raw_text, 70)
+        ));
         let snapshot = self.get_graph_snapshot().await?;
         let text_lower = correction.raw_text.to_lowercase();
         let timestamp = chrono::Utc::now().to_rfc3339();
@@ -658,7 +824,7 @@ impl MemoryEngine for CogneeMemoryEngine {
         let mut edges_deprecated: u32 = 0;
         let mut edges_created_direct: u32 = 0;
 
-        let mut deprecate_pair = |from_id: &str, to_id: &str| -> Vec<(String, String, String)> {
+        let deprecate_pair = |from_id: &str, to_id: &str| -> Vec<(String, String, String)> {
             snapshot
                 .relationships
                 .iter()
@@ -672,6 +838,10 @@ impl MemoryEngine for CogneeMemoryEngine {
         };
 
         // 1. LLM intent extraction → structured operations.
+        trace::stage(
+            "intent extraction",
+            "LLM converts the correction into deprecate/create graph operations",
+        );
         let ops = self
             .extract_correction_ops(&correction.raw_text, &graph_entities)
             .await;
@@ -769,6 +939,13 @@ impl MemoryEngine for CogneeMemoryEngine {
             edges_created_direct += 1;
         }
 
+        trace::stage(
+            "graph surgery",
+            format!(
+                "{edges_deprecated} edge(s) deprecated (amber-dashed, audit-preserved) · {edges_created_direct} created"
+            ),
+        );
+
         // 3. Audit node — lives in the graph itself, never deleted.
         let audit_node_id = format!("audit-{}", Uuid::new_v4());
         self.graph_db
@@ -783,8 +960,13 @@ impl MemoryEngine for CogneeMemoryEngine {
             }))
             .await
             .map_err(|e| MemoryError::Storage(format!("audit node creation failed: {e}")))?;
+        trace::stage("audit node", format!("written into the graph: {audit_node_id}"));
 
         // 4. Memify the superseding fact so retrieval reflects the correction.
+        trace::stage(
+            "memify correction",
+            "remember() writes the superseding fact into semantic memory",
+        );
         let corrective_statement = format!(
             "CORRECTION ({timestamp}, recorded by {}): {}. \
              This correction supersedes and deprecates any earlier statement \
@@ -820,6 +1002,10 @@ impl MemoryEngine for CogneeMemoryEngine {
                 .as_ref()
                 .map(|cr| cr.edges.len() as u32)
                 .unwrap_or(0);
+
+        op.finish(format!(
+            "{edges_created} edge(s) created · {edges_deprecated} deprecated · audit {audit_node_id}"
+        ));
 
         Ok(CorrectionResult {
             edges_created,

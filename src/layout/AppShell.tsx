@@ -1,6 +1,7 @@
 import { Outlet } from 'react-router';
 import NavRail from './NavRail';
 import TopologyStrip from './TopologyStrip';
+import CognitionTrace from '../components/CognitionTrace';
 import { useNavigation } from '../hooks/useNavigation';
 import { useKeyboardShortcut } from '../hooks/useKeyboardShortcut';
 
@@ -29,6 +30,7 @@ export default function AppShell() {
       <header className="app-header">
         <span className="app-header__title">SOVEREIGN SUPPLY CHAIN RISK ENGINE</span>
         <div className="app-header__actions">
+          <CognitionTrace />
           <span className="text-mono-sm text-muted">
             ⌘K to search
           </span>

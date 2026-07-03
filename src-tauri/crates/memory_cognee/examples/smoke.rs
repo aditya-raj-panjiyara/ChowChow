@@ -9,6 +9,20 @@ use memory_engine::{MemoryEngine, SourceType};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Print the live cognition trace alongside the smoke run — verifies the
+    // same event stream the UI panel consumes.
+    let mut trace_rx = memory_cognee::trace::subscribe();
+    tokio::spawn(async move {
+        while let Ok(ev) = trace_rx.recv().await {
+            println!(
+                "      [trace:{:<8}] {} {}",
+                ev.kind,
+                ev.label,
+                ev.detail.lines().next().unwrap_or("")
+            );
+        }
+    });
+
     let work_dir = std::env::temp_dir().join("cognee_smoke_test");
     // Wipe previous state but keep downloaded embedding models — they are
     // immutable, and re-downloading every run trips upstream rate limits.

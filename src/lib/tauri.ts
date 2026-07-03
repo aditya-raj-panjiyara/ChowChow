@@ -114,6 +114,10 @@ export async function confirmCorrection(correctionId: string): Promise<Correctio
   return invoke('confirm_correction', { correctionId });
 }
 
+export async function rejectCorrection(correctionId: string): Promise<void> {
+  return invoke('reject_correction', { correctionId });
+}
+
 export async function listCorrections(): Promise<CorrectionEntry[]> {
   return invoke('list_corrections');
 }
