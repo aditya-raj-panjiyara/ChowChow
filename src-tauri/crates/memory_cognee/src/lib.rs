@@ -17,6 +17,7 @@
 //! file-based (SQLite + Ladybug + LanceDB) inside Tauri's `app_data_dir()`.
 
 pub mod config;
+pub mod live_graph;
 pub mod trace;
 
 use std::borrow::Cow;
@@ -132,6 +133,11 @@ impl CogneeMemoryEngine {
         let llm: Arc<dyn Llm> = Arc::new(trace::TracedLlm::new(llm));
         let embedding_engine: Arc<dyn EmbeddingEngine> =
             Arc::new(trace::TracedEmbedding::new(embedding_engine));
+
+        // Live Graph interceptor — every node/edge cognee writes (cognify,
+        // corrections, audit nodes) is broadcast as a graph-delta event the
+        // moment it lands, powering the Graph Explorer's real-time growth view.
+        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(live_graph::LiveGraphDb::new(graph_db));
 
         // Construct session store and manager
         let sessions_dir = app_config.storage_root.join("sessions");
@@ -550,16 +556,7 @@ impl MemoryEngine for CogneeMemoryEngine {
             .await
             .map_err(|e| MemoryError::Storage(format!("graph snapshot failed: {e}")))?;
 
-        const PLUMBING_TYPES: [&str; 8] = [
-            "DocumentChunk",
-            "TextChunk",
-            "TextDocument",
-            "TextSummary",
-            "EntityType",
-            "NodeSet",
-            "Table",
-            "TableRow",
-        ];
+        use live_graph::PLUMBING_TYPES;
 
         // First pass: EntityType node id → semantic type name ("Person", …).
         let mut type_name_by_id: std::collections::HashMap<String, String> =

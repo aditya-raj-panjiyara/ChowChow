@@ -441,7 +441,7 @@ export default function GraphCanvas({
         ))}
         <span style={{ width: 1, height: 14, background: 'var(--border-hairline)' }} />
         <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <span style={{ width: 12, height: 8, borderRadius: 2, border: '1.5px dashed var(--signal-amber)' }} />
+          <span style={{ width: 20, height: 8, borderRadius: 2, border: '1.5px dashed var(--signal-amber)' }} />
           Single point of failure
         </span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>

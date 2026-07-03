@@ -88,6 +88,23 @@ pub fn run() {
                         }
                     }
                 });
+
+                // ── Live Graph forwarder ─────────────────────────
+                // Streams every node/edge write cognee makes to the webview,
+                // where the Graph Explorer renders the graph growing live.
+                let delta_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut rx = memory_cognee::live_graph::subscribe();
+                    loop {
+                        match rx.recv().await {
+                            Ok(event) => {
+                                let _ = delta_handle.emit("graph-delta", &event);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
             }
 
             #[cfg(feature = "cognee")]

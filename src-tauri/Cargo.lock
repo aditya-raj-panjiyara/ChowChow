@@ -3059,11 +3059,14 @@ dependencies = [
 name = "domain"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "memory_engine",
+ "memory_sqlite",
  "serde",
  "serde_json",
  "sqlx",
+ "tokio",
  "uuid",
 ]
 

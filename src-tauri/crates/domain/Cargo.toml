@@ -11,3 +11,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+memory_sqlite = { path = "../memory_sqlite" }
+tokio = { version = "1", features = ["macros", "rt"] }
+async-trait = "0.1"
