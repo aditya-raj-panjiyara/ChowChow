@@ -193,3 +193,21 @@ pub async fn delete_custom_relationship(
 
     Ok(())
 }
+
+/// Restore every soft-deleted node and relationship.
+///
+/// Deletions are tombstones layered over the cognee graph — nothing is ever
+/// hard-deleted from memory — so clearing the tombstone tables brings the
+/// full extracted graph back. Returns how many tombstones were removed.
+#[tauri::command]
+pub async fn restore_deleted_graph(state: State<'_, AppState>) -> Result<u64, String> {
+    let nodes = sqlx::query("DELETE FROM deleted_entities")
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    let rels = sqlx::query("DELETE FROM deleted_relationships")
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(nodes.rows_affected() + rels.rows_affected())
+}

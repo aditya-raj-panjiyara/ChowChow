@@ -69,14 +69,17 @@ export function useForceSimulation() {
   const simulate = useCallback((
     nodes: SimulationNode[],
     relationships: Relationship[],
-    onTick: (nodes: SimulationNode[]) => void
+    onTick: (nodes: SimulationNode[]) => void,
+    options?: { gentle?: boolean }
   ) => {
     if (frameRef.current) {
       cancelAnimationFrame(frameRef.current);
     }
 
     nodesRef.current = nodes;
-    tickRef.current = 0;
+    // Gentle mode (live incremental updates): start with decayed alpha so the
+    // settled layout is nudged, not jolted, on every restart.
+    tickRef.current = options?.gentle ? 45 : 0;
     isRunningRef.current = true;
 
     const tick = () => {

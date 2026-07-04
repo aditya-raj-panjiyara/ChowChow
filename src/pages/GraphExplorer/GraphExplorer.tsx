@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import GraphCanvas, { type BlastOverlayData } from './GraphCanvas';
+import { useLiveGraph, type DeltaApplied, type GraphDelta } from './useLiveGraph';
 import InspectorPanel from './InspectorPanel';
 import GraphSearch from './GraphSearch';
 import GraphFilters from './GraphFilters';
@@ -13,6 +14,7 @@ import {
   deleteCustomNode,
   addCustomRelationship,
   deleteCustomRelationship,
+  restoreDeletedGraph,
   simulateBlastRadius,
   type BlastRadiusResult,
 } from '../../lib/tauri';
@@ -81,15 +83,21 @@ export default function GraphExplorer() {
   const navigate = useNavigate();
   const [entities, setEntities] = useState<Entity[]>(demoEntities);
   const [relationships, setRelationships] = useState<Relationship[]>(demoRelationships);
+  // True when the BACKEND says the graph is empty — we show an honest empty
+  // state, never simulated nodes (those masquerade as real data and can't
+  // be deleted, which reads as the app "adding" phantom nodes).
+  const [backendEmpty, setBackendEmpty] = useState(false);
 
   const loadGraph = useCallback(async () => {
     try {
       const snapshot = await getGraphSnapshot();
       if (snapshot.entities.length === 0) {
-        setEntities(demoEntities);
-        setRelationships(demoRelationships);
+        setBackendEmpty(true);
+        setEntities([]);
+        setRelationships([]);
         return;
       }
+      setBackendEmpty(false);
       const mapped: Entity[] = snapshot.entities.map(e => ({
         id: e.id,
         name: e.name,
@@ -114,6 +122,92 @@ export default function GraphExplorer() {
   useEffect(() => {
     loadGraph();
   }, [loadGraph]);
+
+  // ── Live graph stream ───────────────────────────────────────
+  // The backend broadcasts every node/edge cognee writes (graph-delta).
+  // Deltas are applied one-by-one against the current state via refs, and
+  // fresh ids get a spawn animation on the canvas for a few seconds.
+  const entitiesRef = useRef(entities);
+  entitiesRef.current = entities;
+  const relationshipsRef = useRef(relationships);
+  relationshipsRef.current = relationships;
+
+  const [freshNodeIds, setFreshNodeIds] = useState<Set<string>>(new Set());
+  const [freshEdgeIds, setFreshEdgeIds] = useState<Set<string>>(new Set());
+  const freshTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const markFresh = useCallback((kind: 'node' | 'edge', id: string) => {
+    const setter = kind === 'node' ? setFreshNodeIds : setFreshEdgeIds;
+    setter(prev => new Set(prev).add(id));
+    freshTimers.current.push(setTimeout(() => {
+      setter(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }, 6000));
+  }, []);
+  useEffect(() => () => freshTimers.current.forEach(clearTimeout), []);
+
+  const applyDelta = useCallback((d: GraphDelta): DeltaApplied => {
+    if (d.kind === 'node_added' && d.id && d.name) {
+      // Audit nodes are query overlay machinery, not supply-chain entities.
+      if (d.entity_type === 'AuditCorrection') return 'other';
+      if (entitiesRef.current.some(e => e.id === d.id)) return 'other';
+      setEntities(prev => [...prev, {
+        id: d.id!,
+        name: d.name!,
+        type: mapEntityType(d.entity_type ?? ''),
+        connectionCount: 0,
+      }]);
+      markFresh('node', d.id);
+      return 'node';
+    }
+
+    if (d.kind === 'edge_added' && d.from_id && d.to_id && d.rel_type) {
+      const known = new Set(entitiesRef.current.map(e => e.id));
+      // Plumbing edges (chunk/document links) reference filtered-out nodes.
+      if (!known.has(d.from_id) || !known.has(d.to_id)) return 'other';
+      const exists = relationshipsRef.current.some(
+        r => r.sourceId === d.from_id && r.targetId === d.to_id && r.label === d.rel_type,
+      );
+      if (exists) return 'other';
+      const relId = `live-${d.seq}`;
+      setRelationships(prev => [...prev, {
+        id: relId,
+        sourceId: d.from_id!,
+        targetId: d.to_id!,
+        label: d.rel_type!,
+        deprecated: false,
+        weight: 1,
+      }]);
+      setEntities(prev => prev.map(e =>
+        e.id === d.from_id || e.id === d.to_id
+          ? { ...e, connectionCount: e.connectionCount + 1 }
+          : e,
+      ));
+      markFresh('edge', relId);
+      return 'edge';
+    }
+
+    if (d.kind === 'edge_updated' && d.from_id && d.to_id && d.active === false) {
+      setRelationships(prev => prev.map(r =>
+        r.sourceId === d.from_id && r.targetId === d.to_id && (!d.rel_type || r.label === d.rel_type)
+          ? { ...r, deprecated: true }
+          : r,
+      ));
+      return 'other';
+    }
+
+    if (d.kind === 'node_removed' && d.id) {
+      setEntities(prev => prev.filter(e => e.id !== d.id));
+      setRelationships(prev => prev.filter(r => r.sourceId !== d.id && r.targetId !== d.id));
+      return 'other';
+    }
+
+    return null;
+  }, [markFresh]);
+
+  const { live: liveActive, counts: liveCounts } = useLiveGraph(applyDelta);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [activeFilters, setActiveFilters] = useState<EntityType[]>(['supplier', 'port', 'factory', 'material', 'customer']);
@@ -278,6 +372,16 @@ export default function GraphExplorer() {
     setPendingLabel('ships_to');
   }, []);
 
+  const handleRestoreGraph = useCallback(async () => {
+    try {
+      const restored = await restoreDeletedGraph();
+      await loadGraph();
+      showToast('ok', `Restored ${restored} deleted node(s)/relationship(s) — nothing is ever hard-deleted from memory`);
+    } catch (err) {
+      showToast('err', `Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [loadGraph, showToast]);
+
   const focusOn = useCallback((id: string) => {
     setSelectedNodeId(id);
     setFocusNodeId(id);
@@ -328,11 +432,65 @@ export default function GraphExplorer() {
         blast={blastOverlay}
         focusNonce={focusNonce}
         focusNodeId={focusNodeId}
+        freshNodeIds={freshNodeIds}
+        freshEdgeIds={freshEdgeIds}
         onSelectNode={setSelectedNodeId}
         onEditNode={handleEditNode}
         onUpdateNodePosition={() => {}}
         onRequestConnection={handleRequestConnection}
       />
+
+      {/* Honest empty state — never phantom demo nodes */}
+      {backendEmpty && entities.length === 0 && (
+        <div style={{
+          position: 'absolute', inset: 0, display: 'flex',
+          alignItems: 'center', justifyContent: 'center', pointerEvents: 'none',
+        }}>
+          <div className="panel" style={{
+            pointerEvents: 'auto', padding: 'var(--space-2xl)',
+            textAlign: 'center', maxWidth: 440,
+          }}>
+            <div style={{ fontSize: 17, fontWeight: 600, fontFamily: "'Inter Tight', sans-serif", marginBottom: 8 }}>
+              Knowledge graph is empty
+            </div>
+            <p style={{ color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.7, marginBottom: 18 }}>
+              Deleted nodes are tombstones, never hard-deletes — the extracted
+              graph is still in memory and can be brought back in one click.
+              Or ingest documents to grow it fresh.
+            </p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+              <button className="btn btn--primary" onClick={handleRestoreGraph}>
+                ↺ Restore deleted nodes
+              </button>
+              <button className="btn btn--ghost" onClick={() => navigate('/ingestion')}>
+                Go to Ingestion
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live growth badge — the knowledge graph is being written right now */}
+      {liveActive && !blastResult && (
+        <div style={{
+          position: 'absolute', top: 60, left: '50%', transform: 'translateX(-50%)',
+          display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px',
+          background: 'var(--bg-surface)', border: '1px solid var(--signal-green)',
+          borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-panel)', zIndex: 7,
+          animation: 'fade-in 0.2s ease',
+        }}>
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%', background: 'var(--signal-green)',
+            animation: 'pulse-dot 1.2s ease-in-out infinite',
+          }} />
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--signal-green)', whiteSpace: 'nowrap' }}>
+            LIVE — knowledge graph growing
+          </span>
+          <span className="text-mono-sm" style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+            +{liveCounts.nodes} entities · +{liveCounts.edges} links
+          </span>
+        </div>
+      )}
 
       {/* Critical Dependencies panel */}
       {!blastResult && (

@@ -39,6 +39,10 @@ async fn setup_sqlite(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Load .env (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET, …) before anything
+    // reads the environment. Missing file is fine — env vars still work.
+    let _ = dotenvy::dotenv();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -177,6 +181,7 @@ pub fn run() {
             commands::graph::delete_custom_node,
             commands::graph::add_custom_relationship,
             commands::graph::delete_custom_relationship,
+            commands::graph::restore_deleted_graph,
             commands::corrections::submit_correction,
             commands::corrections::confirm_correction,
             commands::corrections::reject_correction,
@@ -187,6 +192,9 @@ pub fn run() {
             commands::settings::save_settings,
             commands::settings::get_system_info,
             commands::google_sync::sync_google_workspace,
+            commands::google_sync::google_auth_status,
+            commands::google_sync::google_connect,
+            commands::google_sync::google_disconnect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

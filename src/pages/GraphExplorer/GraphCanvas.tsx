@@ -23,6 +23,10 @@ interface GraphCanvasProps {
   /** Increment to re-center the view on focusNodeId */
   focusNonce: number;
   focusNodeId: string | null;
+  /** Nodes just streamed in live — spawn animation + halo */
+  freshNodeIds: Set<string>;
+  /** Relationships just streamed in live — highlight */
+  freshEdgeIds: Set<string>;
   onSelectNode: (id: string | null) => void;
   onEditNode: (id: string) => void;
   onUpdateNodePosition: (id: string, x: number, y: number) => void;
@@ -47,6 +51,8 @@ export default function GraphCanvas({
   blast,
   focusNonce,
   focusNodeId,
+  freshNodeIds,
+  freshEdgeIds,
   onSelectNode,
   onEditNode,
   onUpdateNodePosition,
@@ -94,17 +100,78 @@ export default function GraphCanvas({
     };
   }, []);
 
+  // Position memory — remembers where every node has ever settled (survives
+  // filter toggles), so incremental updates never reshuffle the layout.
+  const positionMemoryRef = useRef(new Map<string, SimulationNode>());
+  const lastLayoutNonceRef = useRef(0);
+  useEffect(() => {
+    for (const n of nodes) positionMemoryRef.current.set(n.id, n);
+  }, [nodes]);
+
   // Initialize and run simulation; card size scales with criticality.
+  //
+  // Two modes:
+  // - Bulk change (first snapshot load, manual re-layout): most nodes have no
+  //   remembered position — lay the whole graph out fresh on the grid.
+  // - Incremental (live growth, filter toggles): placed nodes stay put; each
+  //   new node fans out around its first placed neighbor, or around the
+  //   periphery of the existing cloud, and the force layout pulls it in.
   useEffect(() => {
     if (dimensions.width <= 0 || dimensions.height <= 0 || entities.length === 0) return;
 
-    const initialNodes = initializeNodes(entities, dimensions.width, dimensions.height).map(n => {
+    // A manual "Re-run layout" forgets all positions and starts fresh.
+    if (layoutNonce !== lastLayoutNonceRef.current) {
+      lastLayoutNonceRef.current = layoutNonce;
+      positionMemoryRef.current.clear();
+    }
+
+    const memory = positionMemoryRef.current;
+    const placedEntities = entities.filter(e => memory.has(e.id));
+    const incremental = placedEntities.length >= Math.max(1, entities.length * 0.6);
+    const existing = incremental ? placedEntities.map(e => memory.get(e.id)!) : undefined;
+
+    const initialNodes = initializeNodes(entities, dimensions.width, dimensions.height, existing).map(n => {
       const crit = analytics.get(n.id)?.criticality ?? 0;
       return { ...n, width: 190 + crit * 80, height: 112 + crit * 26 };
     });
+
+    if (incremental && existing) {
+      const placedIds = new Set(existing.map(n => n.id));
+      // Extents of the placed cloud — spawn fallbacks land on its rim.
+      let cx = 0, cy = 0;
+      for (const p of existing) { cx += p.x; cy += p.y; }
+      cx /= existing.length;
+      cy /= existing.length;
+      let cloudR = 0;
+      for (const p of existing) cloudR = Math.max(cloudR, Math.hypot(p.x - cx, p.y - cy));
+
+      // Golden-angle fan: simultaneous arrivals spread out instead of stacking.
+      let spawnIndex = 0;
+      for (const n of initialNodes) {
+        if (placedIds.has(n.id)) continue;
+        const rel = relationships.find(r =>
+          (r.sourceId === n.id && placedIds.has(r.targetId)) ||
+          (r.targetId === n.id && placedIds.has(r.sourceId)),
+        );
+        const anchor = rel ? memory.get(rel.sourceId === n.id ? rel.targetId : rel.sourceId) : undefined;
+        const angle = spawnIndex * 2.39996 + Math.random() * 0.5;
+        spawnIndex += 1;
+        if (anchor) {
+          const r = 300 + Math.random() * 140;
+          n.x = anchor.x + Math.cos(angle) * r;
+          n.y = anchor.y + Math.sin(angle) * r;
+        } else {
+          const r = cloudR + 260 + Math.random() * 160;
+          n.x = cx + Math.cos(angle) * r;
+          n.y = cy + Math.sin(angle) * r;
+        }
+        // Remember immediately so the next delta doesn't re-seed this node.
+        memory.set(n.id, n);
+      }
+    }
     setNodes(initialNodes);
 
-    const cleanup = simulate(initialNodes, relationships, updated => setNodes(updated));
+    const cleanup = simulate(initialNodes, relationships, updated => setNodes(updated), { gentle: incremental });
     return cleanup;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dimensions.width, dimensions.height, entities.length, relationships.length, layoutNonce]);
@@ -340,6 +407,7 @@ export default function GraphCanvas({
                   targetNode={nodes.find(n => n.id === rel.targetId)}
                   dimmed={isEdgeDimmed(rel)}
                   blastPath={isEdgeOnBlastPath(rel)}
+                  isNew={freshEdgeIds.has(rel.id)}
                 />
               ))}
             </g>
@@ -379,6 +447,7 @@ export default function GraphCanvas({
                   isConnectCandidate={!!connectingSourceId && hoveredNodeId === node.id && node.id !== connectingSourceId}
                   isConnectSource={connectingSourceId === node.id}
                   isHovered={hoveredNodeId === node.id}
+                  isNew={freshNodeIds.has(node.id)}
                 />
               ))}
             </g>

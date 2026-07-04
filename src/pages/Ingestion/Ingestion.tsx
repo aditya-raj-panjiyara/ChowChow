@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router';
 import SourceList from './SourceList';
 import DropZone from './DropZone';
 import IngestionSummary from './IngestionSummary';
@@ -8,6 +9,10 @@ import {
   ingestFile,
   sourceTypeFromPath,
   syncGoogleWorkspace,
+  googleAuthStatus,
+  googleConnect,
+  googleDisconnect,
+  type GoogleAuthStatus,
   type IngestionJob,
 } from '../../lib/tauri';
 import type { FileItem, FileStatus } from '../../types';
@@ -53,20 +58,33 @@ function stageLabel(job: IngestionJob): string {
 }
 
 export default function Ingestion() {
+  const navigate = useNavigate();
   const [activeSource, setActiveSource] = useState('src-erp');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [totalEntities, setTotalEntities] = useState(ingestionStats.entityCount);
   const [totalRelationships, setTotalRelationships] = useState(ingestionStats.relationshipCount);
 
-  // Google Workspace API sync state
-  const [apiKey, setApiKey] = useState('');
-  const [clientId, setClientId] = useState('');
-  const [clientSecret, setClientSecret] = useState('');
+  // Google Workspace sync state — credentials live in .env, tokens in the
+  // backend; the UI only knows "configured / connected / who".
+  const [gAuth, setGAuth] = useState<GoogleAuthStatus | null>(null);
+  const [connecting, setConnecting] = useState(false);
   const [query, setQuery] = useState('subject:(supply OR risk OR port OR logistics OR invoice)');
   const [syncGmail, setSyncGmail] = useState(true);
   const [syncDrive, setSyncDrive] = useState(true);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [syncMsg, setSyncMsg] = useState('');
+
+  const refreshGoogleAuth = useCallback(async () => {
+    try {
+      setGAuth(await googleAuthStatus());
+    } catch {
+      setGAuth(null); // backend not running
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshGoogleAuth();
+  }, [refreshGoogleAuth]);
 
   const loadJobs = useCallback(async () => {
     try {
@@ -115,34 +133,53 @@ export default function Ingestion() {
     await loadJobs();
   }, [loadJobs]);
 
-  const handleGoogleSync = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const runGoogleSync = useCallback(async () => {
     setSyncStatus('syncing');
-    setSyncMsg('Connecting to Google Workspace and listing files...');
-
+    setSyncMsg('Syncing Gmail and Drive into the knowledge graph…');
     try {
       const result = await syncGoogleWorkspace({
-        api_key: apiKey,
-        client_id: clientId,
-        client_secret: clientSecret,
         query,
         sync_gmail: syncGmail,
         sync_drive: syncDrive,
       });
-
-      if (result.success) {
-        setSyncStatus('success');
-        setSyncMsg(result.message);
-        await loadJobs(); // Reload jobs list to show new ingested files
-      } else {
-        setSyncStatus('error');
-        setSyncMsg(result.message);
-      }
+      setSyncStatus(result.success ? 'success' : 'error');
+      setSyncMsg(result.message);
+      await loadJobs();
     } catch (err) {
       setSyncStatus('error');
       setSyncMsg(String(err));
     }
-  };
+  }, [query, syncGmail, syncDrive, loadJobs]);
+
+  // The single button: browser consent → tokens stored → immediate first sync.
+  const handleGoogleConnect = useCallback(async () => {
+    setConnecting(true);
+    setSyncStatus('syncing');
+    setSyncMsg('Browser opened — sign in with Google and approve access…');
+    try {
+      const status = await googleConnect();
+      setGAuth(status);
+      setSyncMsg(`Connected as ${status.email ?? 'Google account'} — starting first sync…`);
+      await runGoogleSync();
+    } catch (err) {
+      setSyncStatus('error');
+      setSyncMsg(String(err));
+    } finally {
+      setConnecting(false);
+    }
+  }, [runGoogleSync]);
+
+  const handleGoogleDisconnect = useCallback(async () => {
+    try {
+      await googleDisconnect();
+      setSyncStatus('idle');
+      setSyncMsg('');
+      await refreshGoogleAuth();
+    } catch (err) {
+      setSyncStatus('error');
+      setSyncMsg(String(err));
+    }
+  }, [refreshGoogleAuth]);
 
   return (
     <div style={{
@@ -176,43 +213,47 @@ export default function Ingestion() {
               </p>
             </div>
 
-            <form onSubmit={handleGoogleSync} style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 520 }}>
-              <div className="settings-field">
-                <label className="settings-field__label">Google API Key / OAuth Token</label>
-                <input
-                  className="settings-field__input"
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="Enter token (leave blank to run local mock sync simulation)..."
-                />
-                <span style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
-                  🔑 Leave empty to run the mock sync pipeline.
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', gap: 12 }}>
-                <div className="settings-field" style={{ flex: 1 }}>
-                  <label className="settings-field__label">OAuth Client ID</label>
-                  <input
-                    className="settings-field__input"
-                    type="text"
-                    value={clientId}
-                    onChange={(e) => setClientId(e.target.value)}
-                    placeholder="Optional client id..."
-                  />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 520 }}>
+              {/* Connection state — the only credential UI is one button */}
+              {gAuth?.connected ? (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+                  borderRadius: 'var(--radius-md)', background: 'rgba(95,168,138,0.1)',
+                  border: '1px solid var(--signal-green)',
+                }}>
+                  <span className="sovereignty-badge sovereignty-badge--local">● Connected</span>
+                  <span style={{ flex: 1, fontSize: 12.5 }} className="text-mono-sm">
+                    {gAuth.email ?? 'Google account'}
+                  </span>
+                  <button
+                    className="btn btn--ghost"
+                    style={{ fontSize: 11, padding: '4px 10px' }}
+                    onClick={handleGoogleDisconnect}
+                  >
+                    Disconnect
+                  </button>
                 </div>
-                <div className="settings-field" style={{ flex: 1 }}>
-                  <label className="settings-field__label">OAuth Client Secret</label>
-                  <input
-                    className="settings-field__input"
-                    type="password"
-                    value={clientSecret}
-                    onChange={(e) => setClientSecret(e.target.value)}
-                    placeholder="Optional client secret..."
-                  />
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button
+                    className="btn btn--primary"
+                    style={{ width: 'fit-content', padding: '12px 28px', fontSize: 14 }}
+                    disabled={connecting || gAuth?.configured === false}
+                    onClick={handleGoogleConnect}
+                  >
+                    {connecting ? 'Waiting for browser sign-in…' : '🔗 Connect Google Workspace'}
+                  </button>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                    {gAuth?.configured === false ? (
+                      <>No OAuth credentials found — copy <span className="text-mono-sm">.env.example</span> to{' '}
+                      <span className="text-mono-sm">.env</span>, add your <span className="text-mono-sm">GOOGLE_CLIENT_ID</span> and{' '}
+                      <span className="text-mono-sm">GOOGLE_CLIENT_SECRET</span>, restart the app. Sync below runs in demo mode until then.</>
+                    ) : (
+                      <>Opens your browser for Google consent — credentials come from <span className="text-mono-sm">.env</span>, tokens are stored locally and refreshed automatically. First sync starts right after connecting.</>
+                    )}
+                  </span>
                 </div>
-              </div>
+              )}
 
               <div className="settings-field">
                 <label className="settings-field__label">Gmail Search Query Filter</label>
@@ -265,20 +306,50 @@ export default function Ingestion() {
                 </div>
               )}
 
-              <button
-                type="submit"
-                className="btn btn--primary"
-                style={{ width: 'fit-content', padding: '10px 24px' }}
-                disabled={syncStatus === 'syncing'}
-              >
-                {syncStatus === 'syncing' ? 'Syncing...' : 'Start Workspace Sync'}
-              </button>
-            </form>
+              {(gAuth?.connected || gAuth?.configured === false) && (
+                <button
+                  className="btn btn--primary"
+                  style={{ width: 'fit-content', padding: '10px 24px' }}
+                  disabled={syncStatus === 'syncing'}
+                  onClick={runGoogleSync}
+                >
+                  {syncStatus === 'syncing'
+                    ? 'Syncing…'
+                    : gAuth?.connected
+                      ? 'Sync now'
+                      : 'Run demo sync'}
+                </button>
+              )}
+            </div>
           </div>
         ) : (
           <DropZone files={files} onFilesAdded={handleFilesAdded} />
         )}
       </div>
+
+      {/* Live handoff — extraction streams into the Graph Explorer in real time */}
+      {files.some(f => f.status === 'queued' || f.status === 'extracting') && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px',
+          background: 'var(--bg-surface)', borderTop: '1px solid var(--signal-green)',
+        }}>
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%', background: 'var(--signal-green)',
+            animation: 'pulse-dot 1.2s ease-in-out infinite', flexShrink: 0,
+          }} />
+          <span style={{ fontSize: 12.5, color: 'var(--text-primary)', flex: 1 }}>
+            Extraction running — entities and relationships stream into the knowledge graph as cognee discovers them.
+          </span>
+          <button
+            className="btn btn--primary"
+            style={{ fontSize: 12, padding: '6px 14px', whiteSpace: 'nowrap' }}
+            onClick={() => navigate('/graph')}
+          >
+            Watch it grow live →
+          </button>
+        </div>
+      )}
+
       <IngestionSummary
         entityCount={totalEntities}
         relationshipCount={totalRelationships}

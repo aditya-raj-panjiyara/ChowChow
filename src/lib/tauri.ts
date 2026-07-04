@@ -166,14 +166,33 @@ export async function addCustomRelationship(fromId: string, toId: string, relati
   return invoke('add_custom_relationship', { fromId, toId, relationshipType });
 }
 
+export async function restoreDeletedGraph(): Promise<number> {
+  return invoke('restore_deleted_graph');
+}
+
 export async function deleteCustomRelationship(fromId: string, toId: string, relationshipType: string): Promise<void> {
   return invoke('delete_custom_relationship', { fromId, toId, relationshipType });
 }
 
+export interface GoogleAuthStatus {
+  configured: boolean;
+  connected: boolean;
+  email: string | null;
+}
+
+export async function googleAuthStatus(): Promise<GoogleAuthStatus> {
+  return invoke('google_auth_status');
+}
+
+export async function googleConnect(): Promise<GoogleAuthStatus> {
+  return invoke('google_connect');
+}
+
+export async function googleDisconnect(): Promise<void> {
+  return invoke('google_disconnect');
+}
+
 export interface GoogleSyncParams {
-  api_key: string;
-  client_id: string;
-  client_secret: string;
   query: string;
   sync_gmail: boolean;
   sync_drive: boolean;

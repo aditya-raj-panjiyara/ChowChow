@@ -9,6 +9,8 @@ interface GraphEdgeProps {
   dimmed: boolean;
   /** Part of an active blast propagation path */
   blastPath: boolean;
+  /** Just streamed in from live ingestion — green highlight */
+  isNew: boolean;
 }
 
 /**
@@ -20,7 +22,7 @@ interface GraphEdgeProps {
  * - blastPath: amber, thick, fast flow dots — disruption propagation
  * - dimmed: nearly invisible, keeps layout context
  */
-export default function GraphEdge({ relationship, sourceNode, targetNode, dimmed, blastPath }: GraphEdgeProps) {
+export default function GraphEdge({ relationship, sourceNode, targetNode, dimmed, blastPath, isNew }: GraphEdgeProps) {
   if (!sourceNode || !targetNode) return null;
 
   const isDeprecated = relationship.deprecated;
@@ -38,12 +40,14 @@ export default function GraphEdge({ relationship, sourceNode, targetNode, dimmed
     ? 'var(--signal-amber)'
     : isDeprecated
       ? 'var(--signal-amber)'
-      : 'var(--text-muted)';
-  const strokeWidth = blastPath ? 2.5 : isDeprecated ? 2 : 1.5;
-  const baseOpacity = blastPath ? 0.95 : isDeprecated ? 0.5 : 0.35;
+      : isNew
+        ? 'var(--signal-green)'
+        : 'var(--text-muted)';
+  const strokeWidth = blastPath ? 2.5 : isDeprecated ? 2 : isNew ? 2 : 1.5;
+  const baseOpacity = blastPath ? 0.95 : isDeprecated ? 0.5 : isNew ? 0.85 : 0.35;
 
   return (
-    <g style={{ opacity: dimmed ? 0.05 : 1, transition: 'opacity 0.35s ease' }}>
+    <g className={isNew ? 'edge-spawn' : undefined} style={{ opacity: dimmed ? 0.05 : 1, transition: 'opacity 0.35s ease' }}>
       {/* Hover hit area */}
       <path d={pathData} fill="none" stroke="transparent" strokeWidth={12} style={{ cursor: 'pointer' }} />
       {/* Visible path */}
@@ -72,10 +76,10 @@ export default function GraphEdge({ relationship, sourceNode, targetNode, dimmed
         x={(sx + tx) / 2}
         y={(sy + ty) / 2 - 8}
         textAnchor="middle"
-        fill={blastPath ? 'var(--signal-amber)' : 'var(--text-muted)'}
+        fill={blastPath ? 'var(--signal-amber)' : isNew ? 'var(--signal-green)' : 'var(--text-muted)'}
         fontSize={9}
         fontFamily="'JetBrains Mono', monospace"
-        opacity={blastPath ? 0.9 : 0.5}
+        opacity={blastPath || isNew ? 0.9 : 0.5}
         style={{ pointerEvents: 'none' }}
       >
         {relationship.label}

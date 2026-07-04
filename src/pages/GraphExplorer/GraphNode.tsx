@@ -33,6 +33,8 @@ interface GraphNodeProps {
   /** This node is the source of the in-progress connection drag */
   isConnectSource: boolean;
   isHovered: boolean;
+  /** Just streamed in from live ingestion — spring-in + green halo */
+  isNew: boolean;
 }
 
 const entityTypeColors: Record<EntityType, { header: string; headerText: string; border: string }> = {
@@ -82,6 +84,7 @@ export default function GraphNode({
   isConnectCandidate,
   isConnectSource,
   isHovered,
+  isNew,
 }: GraphNodeProps) {
   const colors = entityTypeColors[node.entity.type];
   const nodeWidth = node.width;
@@ -114,6 +117,31 @@ export default function GraphNode({
       onMouseEnter={() => onMouseEnterNode(node.id)}
       onMouseLeave={() => onMouseLeaveNode(node.id)}
     >
+      <g className={isNew ? 'node-spawn' : undefined}>
+      {/* Live-extraction halo — this node was just written by cognee */}
+      {isNew && !blast && (
+        <>
+          <rect
+            x={-6}
+            y={-6}
+            width={nodeWidth + 12}
+            height={nodeHeight + 12}
+            rx={11}
+            fill="none"
+            stroke="var(--signal-green)"
+            strokeWidth={2}
+          >
+            <animate attributeName="opacity" values="0.95;0.3;0.95" dur="1.4s" repeatCount="indefinite" />
+          </rect>
+          <g transform={`translate(${nodeWidth / 2}, ${-12})`}>
+            <rect x={-38} y={-10} width={76} height={17} rx={8.5} fill="rgba(95,168,138,0.18)" stroke="var(--signal-green)" strokeWidth={0.75} />
+            <text x={0} y={2.5} textAnchor="middle" fontSize={8.5} fontWeight={700} letterSpacing="0.08em" fill="var(--signal-green)" fontFamily="'JetBrains Mono', monospace">
+              ✦ EXTRACTED
+            </text>
+          </g>
+        </>
+      )}
+
       {/* Blast severity halo */}
       {blast && (
         <>
@@ -303,6 +331,7 @@ export default function GraphNode({
       <text x={nodeWidth - 24} y={headerHeight + 18} fontSize={10} fill="var(--text-muted)" opacity={0} className="node-edit-icon" style={{ pointerEvents: 'none' }}>
         ✎
       </text>
+      </g>
     </g>
   );
 }
