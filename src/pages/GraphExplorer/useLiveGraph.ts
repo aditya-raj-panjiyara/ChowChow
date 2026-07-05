@@ -23,7 +23,7 @@ export interface GraphDelta {
 }
 
 /** What applying a delta did — drives the LIVE badge counters. */
-export type DeltaApplied = 'node' | 'edge' | 'deprecated' | 'other' | null;
+export type DeltaApplied = 'node' | 'edge' | 'deprecated' | 'restored' | 'other' | null;
 
 /** A committed change surfaced in the Live Changes dialog. */
 export interface ChangeRecord {
@@ -111,7 +111,7 @@ export function useLiveGraph(applyDelta: (delta: GraphDelta) => ApplyResult) {
         if (applied === 'node') setCounts(c => ({ ...c, nodes: c.nodes + 1 }));
         if (applied === 'edge') setCounts(c => ({ ...c, edges: c.edges + 1 }));
         if (applied === 'deprecated') setCounts(c => ({ ...c, deprecated: c.deprecated + 1 }));
-        if (applied === 'node' || applied === 'edge' || applied === 'deprecated') {
+        if (applied === 'node' || applied === 'edge' || applied === 'deprecated' || applied === 'restored') {
           const record: ChangeRecord = {
             seq: delta.seq,
             kind: applied,

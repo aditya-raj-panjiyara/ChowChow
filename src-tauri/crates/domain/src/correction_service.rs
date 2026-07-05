@@ -36,21 +36,26 @@ impl CorrectionService {
 
     /// Phase 1: Record the correction intent as pending.
     /// The frontend should display this for user confirmation before calling `confirm`.
+    ///
+    /// `alert_id` links back to the Command Center alert that suggested this
+    /// correction — confirming the correction auto-resolves that alert.
     pub async fn submit(
         &self,
         raw_text: &str,
         author: &str,
+        alert_id: Option<&str>,
     ) -> Result<CorrectionEntry, String> {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
         sqlx::query(
-            "INSERT INTO correction_log (id, raw_text, author, status, created_at) \
-             VALUES (?, ?, ?, 'pending', ?)",
+            "INSERT INTO correction_log (id, raw_text, author, status, alert_id, created_at) \
+             VALUES (?, ?, ?, 'pending', ?, ?)",
         )
         .bind(&id)
         .bind(raw_text)
         .bind(author)
+        .bind(alert_id)
         .bind(&now)
         .execute(&self.db)
         .await
@@ -70,15 +75,15 @@ impl CorrectionService {
     /// Only call this after the user has confirmed the intent in the UI.
     pub async fn confirm(&self, correction_id: &str) -> Result<CorrectionResult, String> {
         // Fetch the pending correction
-        let row: Option<(String, String, String, String)> = sqlx::query_as(
-            "SELECT id, raw_text, author, status FROM correction_log WHERE id = ?",
+        let row: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
+            "SELECT id, raw_text, author, status, alert_id FROM correction_log WHERE id = ?",
         )
         .bind(correction_id)
         .fetch_optional(&self.db)
         .await
         .map_err(|e| format!("failed to fetch correction: {e}"))?;
 
-        let (id, raw_text, author, status) = row
+        let (id, raw_text, author, status, alert_id) = row
             .ok_or_else(|| format!("correction not found: {correction_id}"))?;
 
         if status != "pending" {
@@ -108,6 +113,18 @@ impl CorrectionService {
         .execute(&self.db)
         .await
         .map_err(|e| format!("failed to update correction status: {e}"))?;
+
+        // Acting on the alert closes the loop: the drift it flagged has been
+        // corrected, so it leaves the Active Alerts feed. Non-fatal — the
+        // correction itself already succeeded.
+        if let Some(alert_id) = alert_id {
+            if let Err(e) = crate::alert_service::AlertService::new(self.db.clone())
+                .resolve_alert(&alert_id, "resolved")
+                .await
+            {
+                eprintln!("[corrections] could not resolve linked alert {alert_id}: {e}");
+            }
+        }
 
         Ok(result)
     }

@@ -48,6 +48,35 @@ impl SqliteStubEngine {
                 .execute(pool)
                 .await?;
         }
+
+        // 003 — Alert lifecycle: acting on an alert resolves it instead of
+        // leaving it in the Active Alerts feed forever.
+        let has_status: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM pragma_table_info('alerts') WHERE name = 'status'",
+        )
+        .fetch_optional(pool)
+        .await?;
+        if has_status.is_none() {
+            sqlx::query("ALTER TABLE alerts ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+                .execute(pool)
+                .await?;
+            sqlx::query("ALTER TABLE alerts ADD COLUMN resolved_at TEXT")
+                .execute(pool)
+                .await?;
+        }
+
+        // 004 — Corrections remember the alert that spawned them, so
+        // confirming the correction auto-resolves the alert.
+        let has_alert_id: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM pragma_table_info('correction_log') WHERE name = 'alert_id'",
+        )
+        .fetch_optional(pool)
+        .await?;
+        if has_alert_id.is_none() {
+            sqlx::query("ALTER TABLE correction_log ADD COLUMN alert_id TEXT")
+                .execute(pool)
+                .await?;
+        }
         Ok(())
     }
 }
@@ -318,6 +347,7 @@ impl MemoryEngine for SqliteStubEngine {
         Ok(CorrectionResult {
             edges_created: 0,
             edges_deprecated: 0,
+            edges_restored: 0,
             audit_node_id: audit_id,
         })
     }

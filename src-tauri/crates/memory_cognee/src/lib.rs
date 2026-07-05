@@ -18,6 +18,7 @@
 
 pub mod config;
 pub mod live_graph;
+pub mod muted_graph;
 pub mod schema_repair;
 pub mod trace;
 
@@ -282,10 +283,20 @@ sc:fulfills rdf:type owl:ObjectProperty ;
         let system = "You convert supply-chain correction statements into graph operations. \
             Respond with ONLY a JSON object, no prose, in exactly this shape:\n\
             {\"deprecate\": [{\"from\": \"<entity>\", \"to\": \"<entity>\"}], \
-             \"create\": [{\"from\": \"<entity>\", \"to\": \"<entity>\", \"relationship\": \"<snake_case_verb>\"}]}\n\
+             \"create\": [{\"from\": \"<entity>\", \"to\": \"<entity>\", \"relationship\": \"<snake_case_verb>\"}], \
+             \"retire\": [\"<entity>\"], \"restore\": [\"<entity>\"]}\n\
             Rules:\n\
-            - deprecate: relationships the correction says are no longer true. \
+            - deprecate: specific relationships the correction says are no longer true. \
               Use ONLY names from KNOWN ENTITIES for both ends; if an end is not listed, omit that pair.\n\
+            - retire: entities the correction discontinues, closes, or marks unusable \
+              as a whole (a port closed, a route discontinued, a supplier shut down) — \
+              EVERY active relationship they have will be deprecated. Use ONLY names \
+              from KNOWN ENTITIES. Use this when the correction names one entity \
+              rather than a specific relationship between two.\n\
+            - restore: entities the correction re-activates, reopens, or marks \
+              usable again (a port reopened, a route resumed, a supplier back \
+              online) — EVERY deprecated relationship they have will be \
+              re-activated. Use ONLY names from KNOWN ENTITIES.\n\
             - create: new relationships the correction introduces. Names not in \
               KNOWN ENTITIES are allowed here (new entities will be created).\n\
             - Direction runs from the provider/source toward the receiver \
@@ -345,6 +356,12 @@ struct CorrectionOps {
     deprecate: Vec<PairOp>,
     #[serde(default)]
     create: Vec<CreateOp>,
+    /// Entities retired wholesale — every active edge they touch is deprecated.
+    #[serde(default)]
+    retire: Vec<String>,
+    /// Entities restored wholesale — every deprecated edge they touch is re-activated.
+    #[serde(default)]
+    restore: Vec<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -882,22 +899,34 @@ impl MemoryEngine for CogneeMemoryEngine {
             .collect();
 
         // Name → id resolution: exact (case-insensitive) first, then containment.
-        let resolve = |name: &str| -> Option<String> {
+        //
+        // Returns ALL matching ids: repeated ingests/memify can create several
+        // nodes with the same name, and their edges are spread across the
+        // duplicates (the UI merges them by name). Deprecating only the first
+        // match would leave the other duplicates' edges active.
+        let resolve_all = |name: &str| -> Vec<String> {
             let lower = name.trim().to_lowercase();
             if lower.len() < 3 {
-                return None;
+                return Vec::new();
+            }
+            let exact: Vec<String> = graph_entities
+                .iter()
+                .filter(|e| e.name.to_lowercase() == lower)
+                .map(|e| e.id.clone())
+                .collect();
+            if !exact.is_empty() {
+                return exact;
             }
             graph_entities
                 .iter()
-                .find(|e| e.name.to_lowercase() == lower)
-                .or_else(|| {
-                    graph_entities.iter().find(|e| {
-                        let en = e.name.to_lowercase();
-                        en.contains(&lower) || lower.contains(&en)
-                    })
+                .filter(|e| {
+                    let en = e.name.to_lowercase();
+                    en.contains(&lower) || lower.contains(&en)
                 })
                 .map(|e| e.id.clone())
+                .collect()
         };
+        let resolve = |name: &str| -> Option<String> { resolve_all(name).into_iter().next() };
 
         let mut edges_deprecated: u32 = 0;
         let mut edges_created_direct: u32 = 0;
@@ -915,6 +944,26 @@ impl MemoryEngine for CogneeMemoryEngine {
                 .collect()
         };
 
+        // Retire an entity wholesale: every active edge it touches.
+        let deprecate_all = |entity_id: &str| -> Vec<(String, String, String)> {
+            snapshot
+                .relationships
+                .iter()
+                .filter(|r| r.active && (r.from_id == entity_id || r.to_id == entity_id))
+                .map(|r| (r.from_id.clone(), r.to_id.clone(), r.relationship_type.clone()))
+                .collect()
+        };
+
+        // Restore an entity wholesale: every deprecated edge it touches.
+        let restore_all = |entity_id: &str| -> Vec<(String, String, String)> {
+            snapshot
+                .relationships
+                .iter()
+                .filter(|r| !r.active && (r.from_id == entity_id || r.to_id == entity_id))
+                .map(|r| (r.from_id.clone(), r.to_id.clone(), r.relationship_type.clone()))
+                .collect()
+        };
+
         // 1. LLM intent extraction → structured operations.
         trace::stage(
             "intent extraction",
@@ -925,13 +974,32 @@ impl MemoryEngine for CogneeMemoryEngine {
             .await;
 
         let mut targets: Vec<(String, String, String)> = Vec::new(); // edges to deprecate
+        let mut revivals: Vec<(String, String, String)> = Vec::new(); // edges to re-activate
         let mut creations: Vec<(String, String, String)> = Vec::new(); // from_id, to_id, rel
 
         match &ops {
-            Some(ops) if !(ops.deprecate.is_empty() && ops.create.is_empty()) => {
+            Some(ops)
+                if !(ops.deprecate.is_empty()
+                    && ops.create.is_empty()
+                    && ops.retire.is_empty()
+                    && ops.restore.is_empty()) =>
+            {
                 for pair in &ops.deprecate {
-                    if let (Some(a), Some(b)) = (resolve(&pair.from), resolve(&pair.to)) {
-                        targets.extend(deprecate_pair(&a, &b));
+                    // Cross-product: edges may connect any duplicate of either name.
+                    for a in resolve_all(&pair.from) {
+                        for b in resolve_all(&pair.to) {
+                            targets.extend(deprecate_pair(&a, &b));
+                        }
+                    }
+                }
+                for name in &ops.retire {
+                    for id in resolve_all(name) {
+                        targets.extend(deprecate_all(&id));
+                    }
+                }
+                for name in &ops.restore {
+                    for id in resolve_all(name) {
+                        revivals.extend(restore_all(&id));
                     }
                 }
                 for op in &ops.create {
@@ -948,34 +1016,82 @@ impl MemoryEngine for CogneeMemoryEngine {
                     } else {
                         op.relationship.trim().to_lowercase().replace(' ', "_")
                     };
-                    // Skip if an identical active edge already exists.
-                    let exists = snapshot.relationships.iter().any(|r| {
-                        r.active
-                            && r.from_id == from_id
-                            && r.to_id == to_id
-                            && r.relationship_type == rel
+                    // Skip if an identical active edge already exists; if a
+                    // deprecated identical edge exists, re-activate it instead
+                    // of stacking a duplicate on top.
+                    let existing = snapshot.relationships.iter().find(|r| {
+                        r.from_id == from_id && r.to_id == to_id && r.relationship_type == rel
                     });
-                    if !exists {
-                        creations.push((from_id, to_id, rel));
+                    match existing {
+                        Some(r) if r.active => {}
+                        Some(_) => revivals.push((from_id, to_id, rel)),
+                        None => creations.push((from_id, to_id, rel)),
                     }
                 }
             }
             _ => {
-                // Fallback: keyword negation between mentioned entities.
-                const NEGATIONS: [&str; 12] = [
+                // Fallback: keyword heuristics between mentioned entities.
+                const NEGATIONS: [&str; 17] = [
                     "no longer", "not ", "never", "stopped", "stops", "ceased",
                     "ended", "cut off", "does not", "doesn't", "removed", "replaced",
+                    "discontinued", "unusable", "closed", "suspended", "retired",
                 ];
-                if NEGATIONS.iter().any(|k| text_lower.contains(k)) {
-                    let mentioned: Vec<&&MemoryEntity> = graph_entities
-                        .iter()
-                        .filter(|e| e.name.len() >= 3 && text_lower.contains(&e.name.to_lowercase()))
-                        .collect();
+                const REVIVALS: [&str; 9] = [
+                    "active again", "reactivated", "re-activated", "reopened",
+                    "resumed", "restored", "back online", "operational again",
+                    "usable again",
+                ];
+                let mentioned: Vec<&&MemoryEntity> = graph_entities
+                    .iter()
+                    .filter(|e| e.name.len() >= 3 && text_lower.contains(&e.name.to_lowercase()))
+                    .collect();
+                let distinct_names: std::collections::HashSet<String> =
+                    mentioned.iter().map(|e| e.name.to_lowercase()).collect();
+
+                // Revival keywords win: "active again" contains no negation,
+                // but guard the order anyway so "no longer unusable"-style
+                // phrasings lean toward restore.
+                if REVIVALS.iter().any(|k| text_lower.contains(k)) {
+                    if distinct_names.len() == 1 {
+                        for m in &mentioned {
+                            revivals.extend(restore_all(&m.id));
+                        }
+                    } else {
+                        // Restore the deprecated edges between the mentioned pair(s).
+                        for a in &mentioned {
+                            for b in &mentioned {
+                                if a.id != b.id && a.name.to_lowercase() != b.name.to_lowercase() {
+                                    revivals.extend(
+                                        snapshot
+                                            .relationships
+                                            .iter()
+                                            .filter(|r| {
+                                                !r.active
+                                                    && ((r.from_id == a.id && r.to_id == b.id)
+                                                        || (r.from_id == b.id && r.to_id == a.id))
+                                            })
+                                            .map(|r| (r.from_id.clone(), r.to_id.clone(), r.relationship_type.clone())),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                } else if NEGATIONS.iter().any(|k| text_lower.contains(k)) {
+                    // Pairs only between distinct *names* — duplicates of the
+                    // same entity are not a relationship to deprecate.
                     for a in &mentioned {
                         for b in &mentioned {
-                            if a.id != b.id {
+                            if a.id != b.id && a.name.to_lowercase() != b.name.to_lowercase() {
                                 targets.extend(deprecate_pair(&a.id, &b.id));
                             }
+                        }
+                    }
+                    // Single-entity corrections ("the Port of Bangkok route is
+                    // discontinued") have no pair to deprecate — retire every
+                    // active edge touching every duplicate of the one name.
+                    if targets.is_empty() && distinct_names.len() == 1 {
+                        for m in &mentioned {
+                            targets.extend(deprecate_all(&m.id));
                         }
                     }
                 }
@@ -999,7 +1115,28 @@ impl MemoryEngine for CogneeMemoryEngine {
             edges_deprecated += 1;
         }
 
-        // 2b. Apply creations.
+        // 2b. Apply revivals — deprecated edges flip back to active.
+        let mut edges_restored: u32 = 0;
+        revivals.sort();
+        revivals.dedup();
+        // An edge can't be both retired and restored in one correction; the
+        // explicit deprecations win, so drop overlaps from the revival list.
+        revivals.retain(|r| !targets.contains(r));
+        for (from_id, to_id, rel_type) in &revivals {
+            for (key, value) in [
+                ("active", serde_json::json!(true)),
+                ("restored_by", serde_json::json!(correction.author)),
+                ("restored_at", serde_json::json!(timestamp)),
+            ] {
+                self.graph_db
+                    .update_edge_property(from_id, to_id, rel_type, key, value)
+                    .await
+                    .map_err(|e| MemoryError::Storage(format!("edge restore failed: {e}")))?;
+            }
+            edges_restored += 1;
+        }
+
+        // 2c. Apply creations.
         for (from_id, to_id, rel) in &creations {
             let props: std::collections::HashMap<Cow<'static, str>, serde_json::Value> = [
                 (Cow::Borrowed("weight"), serde_json::json!(1.0)),
@@ -1020,7 +1157,7 @@ impl MemoryEngine for CogneeMemoryEngine {
         trace::stage(
             "graph surgery",
             format!(
-                "{edges_deprecated} edge(s) deprecated (amber-dashed, audit-preserved) · {edges_created_direct} created"
+                "{edges_deprecated} edge(s) deprecated (amber-dashed, audit-preserved) · {edges_restored} restored · {edges_created_direct} created"
             ),
         );
 
@@ -1035,15 +1172,24 @@ impl MemoryEngine for CogneeMemoryEngine {
                 "author": correction.author,
                 "timestamp": timestamp,
                 "edges_deprecated": edges_deprecated,
+                "edges_restored": edges_restored,
             }))
             .await
             .map_err(|e| MemoryError::Storage(format!("audit node creation failed: {e}")))?;
         trace::stage("audit node", format!("written into the graph: {audit_node_id}"));
 
         // 4. Memify the superseding fact so retrieval reflects the correction.
+        //
+        // Graph writes are MUTED here: the corrective statement must land in
+        // vector memory (so recall and the Drift Sentinel see the superseding
+        // fact), but cognify's entity extraction of the statement itself would
+        // pollute the graph with metadata junk — "Correction", the timestamp,
+        // the author's name, duplicates of entities the correction mentions.
+        // The graph surgery a correction needs already happened above,
+        // precisely.
         trace::stage(
             "memify correction",
-            "remember() writes the superseding fact into semantic memory",
+            "remember() writes the superseding fact into semantic memory (graph writes muted)",
         );
         let corrective_statement = format!(
             "CORRECTION ({timestamp}, recorded by {}): {}. \
@@ -1051,7 +1197,9 @@ impl MemoryEngine for CogneeMemoryEngine {
              that contradicts it.",
             correction.author, correction.raw_text
         );
-        let result: RememberResult = remember(
+        let muted_graph: Arc<dyn GraphDBTrait> =
+            Arc::new(muted_graph::MutedGraphDb::new(self.graph_db.clone()));
+        let _result: RememberResult = remember(
             vec![DataInput::Text(corrective_statement)],
             &self.dataset_name,
             None,
@@ -1061,7 +1209,7 @@ impl MemoryEngine for CogneeMemoryEngine {
             self.add_pipeline.clone(),
             self.llm.clone(),
             self.storage.clone(),
-            self.graph_db.clone(),
+            muted_graph,
             self.vector_db.clone(),
             self.embedding_engine.clone(),
             self.db.clone(),
@@ -1074,20 +1222,18 @@ impl MemoryEngine for CogneeMemoryEngine {
         .await
         .map_err(|e| MemoryError::Storage(format!("correction memify failed: {e}")))?;
 
-        let edges_created = edges_created_direct
-            + result
-                .cognify_result
-                .as_ref()
-                .map(|cr| cr.edges.len() as u32)
-                .unwrap_or(0);
+        // Only edges this correction wrote deliberately — memify's cognify
+        // output never reaches the graph, so it is not counted.
+        let edges_created = edges_created_direct;
 
         op.finish(format!(
-            "{edges_created} edge(s) created · {edges_deprecated} deprecated · audit {audit_node_id}"
+            "{edges_created} edge(s) created · {edges_deprecated} deprecated · {edges_restored} restored · audit {audit_node_id}"
         ));
 
         Ok(CorrectionResult {
             edges_created,
             edges_deprecated,
+            edges_restored,
             audit_node_id,
         })
     }

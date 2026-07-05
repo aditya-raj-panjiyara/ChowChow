@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import RiskPosture from './RiskPosture';
 import ActiveAlerts from './ActiveAlerts';
 import RecentActivity from './RecentActivity';
-import { listAlerts, getIngestionStatus, listCorrections } from '../../lib/tauri';
+import { listAlerts, getIngestionStatus, listCorrections, resolveAlert } from '../../lib/tauri';
 import type { Alert, AlertSeverity, RiskStatus } from '../../types';
 
 /**
@@ -18,34 +18,47 @@ export default function CommandCenter() {
   const [activity, setActivity] = useState<any[]>([]);
   const [isLive, setIsLive] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const load = async () => {
+  const load = useCallback(async (isCancelled?: () => boolean) => {
       try {
         const backendAlerts = await listAlerts();
         const jobs = await getIngestionStatus().catch(() => []);
         const corrections = await listCorrections().catch(() => []);
-        if (cancelled) return;
+        if (isCancelled?.()) return;
 
         const severityMap: Record<string, AlertSeverity> = {
           critical: 'critical',
           elevated: 'elevated',
           stable: 'normal',
         };
+        // Only open alerts belong in the Active feed — acting on an alert
+        // (confirming its correction) or dismissing it retires it.
         setAlerts(
-          backendAlerts.map(a => ({
-            id: a.id,
-            severity: severityMap[a.severity] ?? 'elevated',
-            entityName: a.entity_id ?? 'Drift Sentinel',
-            entityId: a.entity_id ?? '',
-            description: a.description,
-            timestamp: a.created_at,
-            suggestedCorrection: a.suggested_correction ?? undefined,
-          })),
+          backendAlerts
+            .filter(a => (a.status ?? 'active') === 'active')
+            .map(a => ({
+              id: a.id,
+              severity: severityMap[a.severity] ?? 'elevated',
+              entityName: a.entity_id ?? 'Drift Sentinel',
+              entityId: a.entity_id ?? '',
+              description: a.description,
+              timestamp: a.created_at,
+              suggestedCorrection: a.suggested_correction ?? undefined,
+            })),
         );
 
         let activityList: any[] = [];
+        // Closed alerts become activity history instead of vanishing.
+        for (const a of backendAlerts) {
+          if ((a.status ?? 'active') === 'active') continue;
+          activityList.push({
+            id: `alert-${a.id}`,
+            type: 'correction',
+            description: a.status === 'resolved'
+              ? `Alert resolved via correction — ${a.description.length > 70 ? a.description.substring(0, 67) + '...' : a.description}`
+              : `Alert dismissed — ${a.description.length > 80 ? a.description.substring(0, 77) + '...' : a.description}`,
+            timestamp: a.resolved_at ?? a.created_at,
+          });
+        }
         for (const job of jobs) {
           activityList.push({
             id: job.id,
@@ -71,15 +84,30 @@ export default function CommandCenter() {
       } catch {
         // Keep empty
       }
-    };
+  }, []);
 
-    load();
-    const interval = setInterval(load, 5000);
+  useEffect(() => {
+    let cancelled = false;
+    const isCancelled = () => cancelled;
+    load(isCancelled);
+    const interval = setInterval(() => load(isCancelled), 5000);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [load]);
+
+  // Manual dismissal — the alert leaves the feed immediately, no waiting
+  // for the next poll tick.
+  const handleDismiss = useCallback(async (alertId: string) => {
+    setAlerts(prev => prev.filter(a => a.id !== alertId));
+    try {
+      await resolveAlert(alertId, 'dismissed');
+    } catch {
+      // Backend unavailable — the poll will restore it if it's still active.
+    }
+    load();
+  }, [load]);
 
   const riskStatus: RiskStatus = alerts.some(a => a.severity === 'critical')
     ? 'Critical'
@@ -90,7 +118,7 @@ export default function CommandCenter() {
   return (
     <div className="grid-3-col">
       <RiskPosture status={riskStatus} />
-      <ActiveAlerts alerts={alerts} isLive={isLive} />
+      <ActiveAlerts alerts={alerts} isLive={isLive} onDismiss={handleDismiss} />
       <RecentActivity items={activity} />
     </div>
   );

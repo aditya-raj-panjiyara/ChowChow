@@ -18,6 +18,9 @@ pub struct Alert {
     pub entity_id: Option<String>,
     pub description: String,
     pub suggested_correction: Option<String>,
+    /// "active" | "resolved" (correction applied) | "dismissed" (user waved it off)
+    pub status: String,
+    pub resolved_at: Option<String>,
     pub created_at: String,
 }
 
@@ -80,8 +83,31 @@ impl AlertService {
             entity_id: entity_id.map(String::from),
             description: description.to_string(),
             suggested_correction: suggested_correction.map(String::from),
+            status: "active".to_string(),
+            resolved_at: None,
             created_at: now,
         })
+    }
+
+    /// Resolve an alert — `status` is "resolved" (a correction was applied)
+    /// or "dismissed" (the user waved it off). Idempotent: already-closed
+    /// alerts are left untouched.
+    pub async fn resolve_alert(&self, alert_id: &str, status: &str) -> Result<(), String> {
+        let status = match status {
+            "resolved" | "dismissed" => status,
+            other => return Err(format!("invalid alert resolution: {other}")),
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE alerts SET status = ?, resolved_at = ? WHERE id = ? AND status = 'active'",
+        )
+        .bind(status)
+        .bind(&now)
+        .bind(alert_id)
+        .execute(&self.db)
+        .await
+        .map_err(|e| format!("failed to resolve alert: {e}"))?;
+        Ok(())
     }
 
     /// Record a Drift Sentinel finding as an alert.
@@ -104,25 +130,29 @@ impl AlertService {
         .await
     }
 
-    /// List all alerts, most recent first.
+    /// List all alerts, most recent first. Includes resolved/dismissed ones —
+    /// the frontend filters the Active feed and shows resolutions as activity.
     pub async fn list_alerts(&self) -> Result<Vec<Alert>, String> {
-        let rows: Vec<(String, String, Option<String>, String, Option<String>, String)> =
-            sqlx::query_as(
-                "SELECT id, severity, entity_id, description, suggested_correction, created_at \
-                 FROM alerts ORDER BY created_at DESC",
-            )
-            .fetch_all(&self.db)
-            .await
-            .map_err(|e| format!("failed to list alerts: {e}"))?;
+        type Row = (String, String, Option<String>, String, Option<String>, String, Option<String>, String);
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT id, severity, entity_id, description, suggested_correction, \
+                    COALESCE(status, 'active'), resolved_at, created_at \
+             FROM alerts ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.db)
+        .await
+        .map_err(|e| format!("failed to list alerts: {e}"))?;
 
         Ok(rows
             .into_iter()
-            .map(|(id, severity, entity_id, description, suggested_correction, created_at)| Alert {
+            .map(|(id, severity, entity_id, description, suggested_correction, status, resolved_at, created_at)| Alert {
                 id,
                 severity,
                 entity_id,
                 description,
                 suggested_correction,
+                status,
+                resolved_at,
                 created_at,
             })
             .collect())

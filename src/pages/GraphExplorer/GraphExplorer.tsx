@@ -41,6 +41,35 @@ interface Toast {
   text: string;
 }
 
+/** Abstract status/event nodes — mapped onto a status chip, never a card. */
+function isStatusEntity(name: string, entityType?: string | null): boolean {
+  const n = name.trim().toLowerCase();
+  return (
+    n === 'delay' ||
+    n === 'disruption' ||
+    n === 'unreachable' ||
+    n === 'status' ||
+    n === 'warning' ||
+    n === 'customs crackdown' ||
+    n.endsWith(' status') ||
+    (entityType ?? '').trim().toLowerCase() === 'status'
+  );
+}
+
+/** Correction/metadata junk — historic memify output that is not a
+ *  supply-chain entity (dates, the word "correction", correction authors). */
+function isMetadataJunk(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return (
+    n === 'correction' ||
+    n === 'corrections' ||
+    n === 'risk officer' ||
+    n === 'drift sentinel' ||
+    n === 'unnamed' ||
+    /^\d{4}-\d{2}-\d{2}/.test(n) // bare dates / timestamps
+  );
+}
+
 export default function GraphExplorer() {
   const navigate = useNavigate();
   const [entities, setEntities] = useState<Entity[]>([]);
@@ -71,16 +100,7 @@ export default function GraphExplorer() {
       const statusNodeIds = new Set<string>();
 
       for (const e of snapshot.entities) {
-        const normName = e.name.trim().toLowerCase();
-        if (
-          normName === 'delay' ||
-          normName === 'disruption' ||
-          normName === 'unreachable' ||
-          normName === 'status' ||
-          normName === 'warning' ||
-          normName === 'customs crackdown' ||
-          e.entity_type.trim().toLowerCase() === 'status'
-        ) {
+        if (isStatusEntity(e.name, e.entity_type)) {
           statusNodeIds.add(e.id);
         }
       }
@@ -96,6 +116,17 @@ export default function GraphExplorer() {
 
       for (const e of snapshot.entities) {
         if (statusNodeIds.has(e.id)) {
+          continue;
+        }
+
+        // Audit records ("Correction by …") live in the graph for
+        // traceability and the query-time correction overlay, but they are
+        // metadata, not supply-chain entities — deliberately edge-less, so
+        // they'd render as orphaned 0-link "supplier" cards. Keep them off
+        // the canvas; the Corrections Log is their home. (The live-delta
+        // path already skips them.) Same for correction-metadata junk that
+        // historic memify runs extracted ("Correction", dates, authors).
+        if (e.entity_type === 'AuditCorrection' || isMetadataJunk(e.name)) {
           continue;
         }
 
@@ -188,16 +219,8 @@ export default function GraphExplorer() {
       if (d.entity_type === 'AuditCorrection') return { applied: 'other' };
 
       const normName = d.name.trim().toLowerCase();
-      // Filter out abstract status/event nodes
-      if (
-        normName === 'delay' ||
-        normName === 'disruption' ||
-        normName === 'unreachable' ||
-        normName === 'status' ||
-        normName === 'warning' ||
-        normName === 'customs crackdown' ||
-        (d.entity_type || '').trim().toLowerCase() === 'status'
-      ) {
+      // Filter out abstract status/event nodes and correction-metadata junk.
+      if (isStatusEntity(d.name, d.entity_type) || isMetadataJunk(d.name)) {
         return { applied: 'other' };
       }
 
@@ -260,7 +283,8 @@ export default function GraphExplorer() {
       };
     }
 
-    if (d.kind === 'edge_updated' && d.from_id && d.to_id && d.active === false) {
+    if (d.kind === 'edge_updated' && d.from_id && d.to_id && typeof d.active === 'boolean') {
+      const nowActive = d.active;
       let sourceId = d.from_id;
       let targetId = d.to_id;
 
@@ -270,19 +294,21 @@ export default function GraphExplorer() {
       if (sourceNode) sourceId = sourceNode.id;
       if (targetNode) targetId = targetNode.id;
 
+      // Only report a change when the flip actually changes canvas state.
       const match = relationshipsRef.current.find(r =>
         r.sourceId === sourceId && r.targetId === targetId
-        && (!d.rel_type || r.label === d.rel_type) && !r.deprecated,
+        && (!d.rel_type || r.label === d.rel_type) && r.deprecated === nowActive,
       );
       setRelationships(prev => prev.map(r =>
         r.sourceId === sourceId && r.targetId === targetId && (!d.rel_type || r.label === d.rel_type)
-          ? { ...r, deprecated: true }
+          ? { ...r, deprecated: !nowActive }
           : r,
       ));
       if (!match) return { applied: 'other' };
+      if (nowActive) markFresh('edge', match.id);
       const nameOf = (id: string) => entitiesRef.current.find(e => e.id === id)?.name ?? id;
       return {
-        applied: 'deprecated',
+        applied: nowActive ? 'restored' : 'deprecated',
         label: `${nameOf(sourceId)} → ${nameOf(targetId)}`,
         detail: d.rel_type ?? match.label,
         fromId: sourceId,
@@ -709,7 +735,7 @@ export default function GraphExplorer() {
                     }}
                     style={{
                       padding: '9px 14px', borderBottom: '1px solid var(--border-hairline)',
-                      borderLeft: `2px solid ${c.kind === 'node' ? 'var(--signal-green)' : c.kind === 'deprecated' ? 'var(--signal-amber)' : 'var(--accent-cool)'}`,
+                      borderLeft: `2px solid ${c.kind === 'node' || c.kind === 'restored' ? 'var(--signal-green)' : c.kind === 'deprecated' ? 'var(--signal-amber)' : 'var(--accent-cool)'}`,
                       cursor: 'pointer',
                       background: expanded ? 'var(--bg-raised)' : 'transparent',
                       transition: 'background 0.15s ease',
@@ -721,9 +747,9 @@ export default function GraphExplorer() {
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
                       <span className="text-mono-sm" style={{
                         fontSize: 8.5, fontWeight: 700, letterSpacing: '0.08em', flexShrink: 0,
-                        color: c.kind === 'node' ? 'var(--signal-green)' : c.kind === 'deprecated' ? 'var(--signal-amber)' : 'var(--accent-cool)',
+                        color: c.kind === 'node' || c.kind === 'restored' ? 'var(--signal-green)' : c.kind === 'deprecated' ? 'var(--signal-amber)' : 'var(--accent-cool)',
                       }}>
-                        {c.kind === 'node' ? '＋ ENTITY' : c.kind === 'deprecated' ? '− DEPRECATED' : '＋ LINK'}
+                        {c.kind === 'node' ? '＋ ENTITY' : c.kind === 'deprecated' ? '− DEPRECATED' : c.kind === 'restored' ? '↻ RESTORED' : '＋ LINK'}
                       </span>
                       <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {c.label}
@@ -757,6 +783,13 @@ export default function GraphExplorer() {
                             <div style={{ fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.6 }}>
                               Changed node: <strong style={{ color: 'var(--text-primary)' }}>{nameOf(c.nodeId)}</strong>
                               {c.source && <> · extracted from <span style={{ color: 'var(--accent-cool)' }}>{c.source}</span></>}
+                            </div>
+                          ) : c.kind === 'restored' ? (
+                            <div style={{ fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                              Re-activated: <strong style={{ color: 'var(--text-primary)' }}>{nameOf(c.fromId)}</strong>
+                              <span className="text-mono-sm" style={{ color: 'var(--signal-green)' }}> —{c.detail}→ </span>
+                              <strong style={{ color: 'var(--text-primary)' }}>{nameOf(c.toId)}</strong>
+                              {c.source && <> · from <span style={{ color: 'var(--accent-cool)' }}>{c.source}</span></>}
                             </div>
                           ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 10.5, lineHeight: 1.6 }}>

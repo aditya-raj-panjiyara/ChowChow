@@ -110,6 +110,9 @@ pub struct CorrectionIntent {
 pub struct CorrectionResult {
     pub edges_created: u32,
     pub edges_deprecated: u32,
+    /// Previously deprecated edges re-activated ("the route is usable again").
+    #[serde(default)]
+    pub edges_restored: u32,
     /// The audit node ID in the graph for traceability.
     pub audit_node_id: String,
 }

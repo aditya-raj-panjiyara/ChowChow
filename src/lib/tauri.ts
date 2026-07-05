@@ -54,6 +54,7 @@ export interface CorrectionEntry {
 export interface CorrectionResult {
   edges_created: number;
   edges_deprecated: number;
+  edges_restored: number;
   audit_node_id: string;
 }
 
@@ -106,8 +107,8 @@ export async function getGraphSnapshot(): Promise<GraphSnapshot> {
   return invoke('get_graph_snapshot');
 }
 
-export async function submitCorrection(rawText: string, author: string): Promise<CorrectionEntry> {
-  return invoke('submit_correction', { rawText, author });
+export async function submitCorrection(rawText: string, author: string, alertId?: string): Promise<CorrectionEntry> {
+  return invoke('submit_correction', { rawText, author, alertId: alertId ?? null });
 }
 
 export async function confirmCorrection(correctionId: string): Promise<CorrectionResult> {
@@ -135,11 +136,17 @@ export interface BackendAlert {
   entity_id: string | null;
   description: string;
   suggested_correction: string | null;
+  status: 'active' | 'resolved' | 'dismissed';
+  resolved_at: string | null;
   created_at: string;
 }
 
 export async function listAlerts(): Promise<BackendAlert[]> {
   return invoke('list_alerts');
+}
+
+export async function resolveAlert(alertId: string, resolution: 'resolved' | 'dismissed'): Promise<void> {
+  return invoke('resolve_alert', { alertId, resolution });
 }
 
 export async function getSettings(): Promise<AppSettings> {

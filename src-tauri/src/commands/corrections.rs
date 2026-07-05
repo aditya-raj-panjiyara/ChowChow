@@ -17,10 +17,11 @@ use tauri::State;
 pub async fn submit_correction(
     raw_text: String,
     author: String,
+    alert_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<CorrectionEntry, String> {
     let service = CorrectionService::new(state.memory(), state.db.clone());
-    service.submit(&raw_text, &author).await
+    service.submit(&raw_text, &author, alert_id.as_deref()).await
 }
 
 /// Confirm and apply a pending correction (phase 2 — writes to graph).

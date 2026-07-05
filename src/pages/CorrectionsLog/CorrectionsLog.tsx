@@ -42,13 +42,15 @@ function formatTimestamp(iso: string): string {
  *    audit node ID recorded for traceability.
  */
 export default function CorrectionsLog() {
-  // Handoff from a Drift Sentinel alert: correction text arrives prefilled.
+  // Handoff from a Drift Sentinel alert: correction text arrives prefilled,
+  // and the alert id rides along so confirming the correction resolves it.
   const location = useLocation();
-  const handoff = (location.state ?? null) as { draft?: string; author?: string } | null;
+  const handoff = (location.state ?? null) as { draft?: string; author?: string; alertId?: string } | null;
 
   const [corrections, setCorrections] = useState<CorrectionEntry[]>([]);
   const [draft, setDraft] = useState(handoff?.draft ?? '');
   const [author, setAuthor] = useState(handoff?.author ?? 'Risk Officer');
+  const [linkedAlertId, setLinkedAlertId] = useState(handoff?.alertId);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,8 +76,11 @@ export default function CorrectionsLog() {
     setError(null);
     setNotice(null);
     try {
-      await submitCorrection(text, author.trim() || 'Unknown');
+      await submitCorrection(text, author.trim() || 'Unknown', linkedAlertId);
       setDraft('');
+      // The alert link is consumed by this submission — a fresh draft typed
+      // afterwards shouldn't resolve the same alert.
+      setLinkedAlertId(undefined);
       setNotice('Correction recorded as pending — review below and Confirm & Apply to commit it to the graph.');
       await refresh();
     } catch (err) {
@@ -94,7 +99,9 @@ export default function CorrectionsLog() {
       const result = await confirmCorrection(id);
       setNotice(
         `Correction applied — ${result.edges_created} edge(s) created, ` +
-        `${result.edges_deprecated} deprecated. Audit node ${result.audit_node_id}. ` +
+        `${result.edges_deprecated} deprecated` +
+        `${result.edges_restored ? `, ${result.edges_restored} restored to active` : ''}. ` +
+        `Audit node ${result.audit_node_id}. ` +
         `Deprecated edges now render amber-dashed in the Graph Explorer.`,
       );
       await refresh();

@@ -5,13 +5,15 @@ interface ActiveAlertsProps {
   alerts: Alert[];
   /** True once alerts come from the backend (Drift Sentinel) rather than demo data */
   isLive?: boolean;
+  /** Dismiss an alert without applying its correction */
+  onDismiss?: (alertId: string) => void;
 }
 
 /**
  * ActiveAlerts — scrollable alert list, severity-sorted.
  * Each alert expands inline to show downstream entities.
  */
-export default function ActiveAlerts({ alerts, isLive }: ActiveAlertsProps) {
+export default function ActiveAlerts({ alerts, isLive, onDismiss }: ActiveAlertsProps) {
   const severityOrder = { critical: 0, elevated: 1, normal: 2 };
   const sorted = [...alerts].sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
 
@@ -30,9 +32,15 @@ export default function ActiveAlerts({ alerts, isLive }: ActiveAlertsProps) {
         </span>
       </div>
       <div className="panel__body--flush" style={{ flex: 1, overflow: 'auto' }}>
-        {sorted.map(alert => (
-          <AlertRow key={alert.id} alert={alert} />
-        ))}
+        {sorted.length === 0 ? (
+          <div style={{ padding: 'var(--space-xl)', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+            No active alerts — resolved and dismissed alerts move to Recent Activity.
+          </div>
+        ) : (
+          sorted.map(alert => (
+            <AlertRow key={alert.id} alert={alert} onDismiss={onDismiss} />
+          ))
+        )}
       </div>
     </div>
   );

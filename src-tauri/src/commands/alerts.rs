@@ -12,3 +12,17 @@ use tauri::State;
 pub async fn list_alerts(state: State<'_, AppState>) -> Result<Vec<Alert>, String> {
     AlertService::new(state.db.clone()).list_alerts().await
 }
+
+/// Close an alert: `resolution` is "resolved" (correction applied) or
+/// "dismissed" (user waved it off). Alerts linked to a correction resolve
+/// automatically on confirm — this command covers manual dismissal.
+#[tauri::command]
+pub async fn resolve_alert(
+    alert_id: String,
+    resolution: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    AlertService::new(state.db.clone())
+        .resolve_alert(&alert_id, &resolution)
+        .await
+}

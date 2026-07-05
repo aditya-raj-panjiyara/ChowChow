@@ -6,13 +6,15 @@ import MonoText from '../../components/MonoText';
 
 interface AlertRowProps {
   alert: Alert;
+  /** Dismiss without applying the suggested correction */
+  onDismiss?: (alertId: string) => void;
 }
 
 /**
  * AlertRow — single alert with severity dot, entity name, description, timestamp.
  * Click expands inline to show affected downstream entities without leaving the page.
  */
-export default function AlertRow({ alert }: AlertRowProps) {
+export default function AlertRow({ alert, onDismiss }: AlertRowProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const navigate = useNavigate();
 
@@ -53,15 +55,46 @@ export default function AlertRow({ alert }: AlertRowProps) {
             <div style={{ fontStyle: 'italic', marginBottom: 8 }}>
               “{alert.suggestedCorrection}”
             </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                className="btn btn--primary"
+                style={{ fontSize: 11, padding: '4px 12px' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  // alertId rides along: confirming the correction resolves this alert.
+                  navigate('/corrections', {
+                    state: { draft: alert.suggestedCorrection, author: 'Drift Sentinel', alertId: alert.id },
+                  });
+                }}
+              >
+                Review & apply correction →
+              </button>
+              {onDismiss && (
+                <button
+                  className="btn btn--ghost"
+                  style={{ fontSize: 11, padding: '4px 12px' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDismiss(alert.id);
+                  }}
+                >
+                  Dismiss
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {isExpanded && !alert.suggestedCorrection && onDismiss && (
+          <div className="alert-row__expand">
             <button
-              className="btn btn--primary"
+              className="btn btn--ghost"
               style={{ fontSize: 11, padding: '4px 12px' }}
               onClick={(e) => {
                 e.stopPropagation();
-                navigate('/corrections', { state: { draft: alert.suggestedCorrection, author: 'Drift Sentinel' } });
+                onDismiss(alert.id);
               }}
             >
-              Review & apply correction →
+              Dismiss
             </button>
           </div>
         )}
