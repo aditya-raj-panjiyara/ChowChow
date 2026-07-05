@@ -191,6 +191,7 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::get_system_info,
+            commands::settings::get_ollama_models,
             commands::google_sync::sync_google_workspace,
             commands::google_sync::google_auth_status,
             commands::google_sync::google_connect,

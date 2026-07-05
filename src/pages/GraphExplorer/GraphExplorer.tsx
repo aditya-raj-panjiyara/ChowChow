@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import GraphCanvas, { type BlastOverlayData } from './GraphCanvas';
-import { useLiveGraph, type DeltaApplied, type GraphDelta } from './useLiveGraph';
+import { useLiveGraph, type ApplyResult, type GraphDelta } from './useLiveGraph';
 import InspectorPanel from './InspectorPanel';
 import GraphSearch from './GraphSearch';
 import GraphFilters from './GraphFilters';
@@ -148,11 +148,11 @@ export default function GraphExplorer() {
   }, []);
   useEffect(() => () => freshTimers.current.forEach(clearTimeout), []);
 
-  const applyDelta = useCallback((d: GraphDelta): DeltaApplied => {
+  const applyDelta = useCallback((d: GraphDelta): ApplyResult => {
     if (d.kind === 'node_added' && d.id && d.name) {
       // Audit nodes are query overlay machinery, not supply-chain entities.
-      if (d.entity_type === 'AuditCorrection') return 'other';
-      if (entitiesRef.current.some(e => e.id === d.id)) return 'other';
+      if (d.entity_type === 'AuditCorrection') return { applied: 'other' };
+      if (entitiesRef.current.some(e => e.id === d.id)) return { applied: 'other' };
       setEntities(prev => [...prev, {
         id: d.id!,
         name: d.name!,
@@ -160,17 +160,17 @@ export default function GraphExplorer() {
         connectionCount: 0,
       }]);
       markFresh('node', d.id);
-      return 'node';
+      return { applied: 'node', label: d.name, detail: d.entity_type ?? 'Entity' };
     }
 
     if (d.kind === 'edge_added' && d.from_id && d.to_id && d.rel_type) {
       const known = new Set(entitiesRef.current.map(e => e.id));
       // Plumbing edges (chunk/document links) reference filtered-out nodes.
-      if (!known.has(d.from_id) || !known.has(d.to_id)) return 'other';
+      if (!known.has(d.from_id) || !known.has(d.to_id)) return { applied: 'other' };
       const exists = relationshipsRef.current.some(
         r => r.sourceId === d.from_id && r.targetId === d.to_id && r.label === d.rel_type,
       );
-      if (exists) return 'other';
+      if (exists) return { applied: 'other' };
       const relId = `live-${d.seq}`;
       setRelationships(prev => [...prev, {
         id: relId,
@@ -186,7 +186,12 @@ export default function GraphExplorer() {
           : e,
       ));
       markFresh('edge', relId);
-      return 'edge';
+      const nameOf = (id: string) => entitiesRef.current.find(e => e.id === id)?.name ?? id;
+      return {
+        applied: 'edge',
+        label: `${nameOf(d.from_id)} → ${nameOf(d.to_id)}`,
+        detail: d.rel_type,
+      };
     }
 
     if (d.kind === 'edge_updated' && d.from_id && d.to_id && d.active === false) {
@@ -195,19 +200,24 @@ export default function GraphExplorer() {
           ? { ...r, deprecated: true }
           : r,
       ));
-      return 'other';
+      return { applied: 'other' };
     }
 
     if (d.kind === 'node_removed' && d.id) {
       setEntities(prev => prev.filter(e => e.id !== d.id));
       setRelationships(prev => prev.filter(r => r.sourceId !== d.id && r.targetId !== d.id));
-      return 'other';
+      return { applied: 'other' };
     }
 
-    return null;
+    return { applied: null };
   }, [markFresh]);
 
-  const { live: liveActive, counts: liveCounts } = useLiveGraph(applyDelta);
+  const { live: liveActive, counts: liveCounts, changes: liveChanges, clearChanges } = useLiveGraph(applyDelta);
+  const [showChangesDialog, setShowChangesDialog] = useState(false);
+  // Auto-open the dialog the moment the first live change lands.
+  useEffect(() => {
+    if (liveActive && liveChanges.length > 0) setShowChangesDialog(true);
+  }, [liveActive, liveChanges.length]);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [activeFilters, setActiveFilters] = useState<EntityType[]>(['supplier', 'port', 'factory', 'material', 'customer']);
@@ -470,25 +480,138 @@ export default function GraphExplorer() {
         </div>
       )}
 
-      {/* Live growth badge — the knowledge graph is being written right now */}
-      {liveActive && !blastResult && (
-        <div style={{
-          position: 'absolute', top: 60, left: '50%', transform: 'translateX(-50%)',
-          display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px',
-          background: 'var(--bg-surface)', border: '1px solid var(--signal-green)',
-          borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-panel)', zIndex: 7,
-          animation: 'fade-in 0.2s ease',
-        }}>
+      {/* Live growth badge — the knowledge graph is being written right now.
+          Click to open the Live Changes dialog (also auto-opens on first change). */}
+      {(liveActive || (liveChanges.length > 0 && !showChangesDialog)) && !blastResult && (
+        <button
+          onClick={() => setShowChangesDialog(true)}
+          style={{
+            position: 'absolute', top: 60, left: '50%', transform: 'translateX(-50%)',
+            display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px',
+            background: 'var(--bg-surface)', border: `1px solid ${liveActive ? 'var(--signal-green)' : 'var(--border-hairline)'}`,
+            borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-panel)', zIndex: 7,
+            animation: 'fade-in 0.2s ease', cursor: 'pointer',
+          }}
+        >
           <span style={{
-            width: 8, height: 8, borderRadius: '50%', background: 'var(--signal-green)',
-            animation: 'pulse-dot 1.2s ease-in-out infinite',
+            width: 8, height: 8, borderRadius: '50%',
+            background: liveActive ? 'var(--signal-green)' : 'var(--text-muted)',
+            animation: liveActive ? 'pulse-dot 1.2s ease-in-out infinite' : undefined,
           }} />
-          <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--signal-green)', whiteSpace: 'nowrap' }}>
-            LIVE — knowledge graph growing
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: liveActive ? 'var(--signal-green)' : 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+            {liveActive ? 'LIVE — knowledge graph growing' : 'Ingestion changes'}
           </span>
           <span className="text-mono-sm" style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-            +{liveCounts.nodes} entities · +{liveCounts.edges} links
+            +{liveCounts.nodes} entities · +{liveCounts.edges} links · view ↗
           </span>
+        </button>
+      )}
+
+      {/* Live Changes dialog — what was created, from which source, and why */}
+      {showChangesDialog && !blastResult && (
+        <div style={{
+          position: 'absolute', top: 60, right: 16, bottom: 16, width: 380,
+          background: 'var(--bg-surface)', border: `1px solid ${liveActive ? 'var(--signal-green)' : 'var(--border-hairline)'}`,
+          borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-raised)', zIndex: 8,
+          display: 'flex', flexDirection: 'column', animation: 'slide-in-right 0.2s ease',
+        }}>
+          {/* Header */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '10px 14px', borderBottom: '1px solid var(--border-hairline)',
+          }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {liveActive && (
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--signal-green)', animation: 'pulse-dot 1.2s ease-in-out infinite' }} />
+              )}
+              <span style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Live Graph Changes
+              </span>
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {liveChanges.length > 0 && (
+                <button
+                  onClick={clearChanges}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 10.5, cursor: 'pointer' }}
+                >
+                  clear
+                </button>
+              )}
+              <button
+                onClick={() => setShowChangesDialog(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 14, cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </span>
+          </div>
+
+          {/* Summary line */}
+          <div style={{
+            padding: '8px 14px', borderBottom: '1px solid var(--border-hairline)',
+            fontSize: 11, color: 'var(--text-muted)', display: 'flex', gap: 14,
+          }}>
+            <span><span className="text-mono-sm" style={{ color: 'var(--signal-green)', fontWeight: 700 }}>{liveCounts.nodes}</span> entities</span>
+            <span><span className="text-mono-sm" style={{ color: 'var(--accent-cool)', fontWeight: 700 }}>{liveCounts.edges}</span> relationships</span>
+            <span style={{ flex: 1 }} />
+            <span>{liveActive ? 'streaming…' : 'complete'}</span>
+          </div>
+
+          {/* Change feed */}
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {liveChanges.length === 0 ? (
+              <div style={{ padding: 'var(--space-2xl)', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12.5, lineHeight: 1.7 }}>
+                Ingest a document — every entity and relationship cognee<br />
+                extracts appears here as it's written, with its source<br />
+                and the reason it was created.
+              </div>
+            ) : (
+              liveChanges.map(c => (
+                <div
+                  key={c.seq}
+                  style={{
+                    padding: '9px 14px', borderBottom: '1px solid var(--border-hairline)',
+                    borderLeft: `2px solid ${c.kind === 'node' ? 'var(--signal-green)' : 'var(--accent-cool)'}`,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
+                    <span className="text-mono-sm" style={{
+                      fontSize: 8.5, fontWeight: 700, letterSpacing: '0.08em', flexShrink: 0,
+                      color: c.kind === 'node' ? 'var(--signal-green)' : 'var(--accent-cool)',
+                    }}>
+                      {c.kind === 'node' ? '＋ ENTITY' : '＋ LINK'}
+                    </span>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {c.label}
+                    </span>
+                    <span className="text-mono-sm" style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>
+                      {c.detail}
+                    </span>
+                  </div>
+                  {c.source && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cool)" strokeWidth="2" style={{ flexShrink: 0 }}>
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                      <span className="text-mono-sm" style={{ fontSize: 10, color: 'var(--accent-cool)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {c.source}
+                      </span>
+                    </div>
+                  )}
+                  {c.reason && (
+                    <div style={{ fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.5, paddingLeft: 15 }}>
+                      {c.reason}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+
+          <div style={{ padding: '7px 14px', borderTop: '1px solid var(--border-hairline)', fontSize: 10, color: 'var(--text-muted)' }}>
+            Every row is a real write cognee made to the knowledge graph.
+          </div>
         </div>
       )}
 

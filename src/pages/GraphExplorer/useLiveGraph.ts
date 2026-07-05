@@ -15,14 +15,41 @@ export interface GraphDelta {
   to_id: string | null;
   rel_type: string | null;
   active: boolean | null;
+  /** Origin document/operation — e.g. "chow_shipments_erp.csv". */
+  source: string | null;
+  /** Why this change happened, in plain language. */
+  reason: string | null;
   ts_ms: number;
 }
 
 /** What applying a delta did — drives the LIVE badge counters. */
 export type DeltaApplied = 'node' | 'edge' | 'other' | null;
 
+/** A committed change surfaced in the Live Changes dialog. */
+export interface ChangeRecord {
+  seq: number;
+  kind: DeltaApplied;
+  /** Human label of what was created, e.g. "Golden Tiger Warehouse" or "Chow → Kingsley". */
+  label: string;
+  /** Entity type (node) or relationship label (edge). */
+  detail: string;
+  source: string | null;
+  reason: string | null;
+  ts_ms: number;
+}
+
+const MAX_CHANGE_LOG = 200;
+
 const DRAIN_INTERVAL_MS = 160;
 const IDLE_LINGER_MS = 3000;
+
+/** What applying a delta did, plus the resolved labels for the change log. */
+export interface ApplyResult {
+  applied: DeltaApplied;
+  /** Node name, or "from → to" for an edge — resolved by the caller. */
+  label?: string;
+  detail?: string;
+}
 
 /**
  * Subscribes to the backend's live graph mutation stream and drains it
@@ -30,11 +57,13 @@ const IDLE_LINGER_MS = 3000;
  * cognify render as the graph visibly growing node-by-node.
  *
  * `applyDelta` mutates the caller's entities/relationships state and reports
- * what it did so the badge counters stay honest.
+ * what it did (plus resolved labels) so the badge counters and the Live
+ * Changes dialog stay honest.
  */
-export function useLiveGraph(applyDelta: (delta: GraphDelta) => DeltaApplied) {
+export function useLiveGraph(applyDelta: (delta: GraphDelta) => ApplyResult) {
   const [live, setLive] = useState(false);
   const [counts, setCounts] = useState({ nodes: 0, edges: 0 });
+  const [changes, setChanges] = useState<ChangeRecord[]>([]);
 
   const queueRef = useRef<GraphDelta[]>([]);
   const drainRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -62,12 +91,26 @@ export function useLiveGraph(applyDelta: (delta: GraphDelta) => DeltaApplied) {
           idleRef.current = setTimeout(() => {
             setLive(false);
             setCounts({ nodes: 0, edges: 0 });
+            // Keep `changes` — the dialog remains reviewable after ingestion.
           }, IDLE_LINGER_MS);
           return;
         }
-        const applied = applyRef.current(delta);
+        const result = applyRef.current(delta);
+        const { applied } = result;
         if (applied === 'node') setCounts(c => ({ ...c, nodes: c.nodes + 1 }));
         if (applied === 'edge') setCounts(c => ({ ...c, edges: c.edges + 1 }));
+        if (applied === 'node' || applied === 'edge') {
+          const record: ChangeRecord = {
+            seq: delta.seq,
+            kind: applied,
+            label: result.label ?? delta.name ?? delta.id ?? '(unknown)',
+            detail: result.detail ?? delta.entity_type ?? delta.rel_type ?? '',
+            source: delta.source,
+            reason: delta.reason,
+            ts_ms: delta.ts_ms,
+          };
+          setChanges(prev => [record, ...prev].slice(0, MAX_CHANGE_LOG));
+        }
       }, DRAIN_INTERVAL_MS);
     };
 
@@ -87,5 +130,7 @@ export function useLiveGraph(applyDelta: (delta: GraphDelta) => DeltaApplied) {
     };
   }, []);
 
-  return { live, counts };
+  const clearChanges = () => setChanges([]);
+
+  return { live, counts, changes, clearChanges };
 }

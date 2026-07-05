@@ -49,6 +49,65 @@ pub fn get_system_info() -> SystemInfo {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct OllamaModelDetails {
+    pub parent_model: Option<String>,
+    pub format: Option<String>,
+    pub family: Option<String>,
+    pub families: Option<Vec<String>>,
+    pub parameter_size: Option<String>,
+    pub quantization_level: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct OllamaModel {
+    pub name: String,
+    pub model: String,
+    pub modified_at: String,
+    pub size: u64,
+    pub digest: String,
+    pub details: OllamaModelDetails,
+    pub capabilities: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct OllamaTagsResponse {
+    pub models: Vec<OllamaModel>,
+}
+
+#[tauri::command]
+pub async fn get_ollama_models(endpoint: String) -> Result<Vec<OllamaModel>, String> {
+    let mut base = endpoint.trim().to_string();
+    if base.is_empty() {
+        base = "http://localhost:11434/v1".to_string();
+    }
+    if base.ends_with('/') {
+        base.pop();
+    }
+    if base.ends_with("/v1") {
+        base = base[..base.len() - 3].to_string();
+    }
+
+    let client = reqwest::Client::new();
+    let tags_url = format!("{}/api/tags", base);
+
+    let resp = client.get(&tags_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to Ollama at {}: {}", tags_url, e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Ollama server returned error status: {}", resp.status()));
+    }
+
+    let data = resp.json::<OllamaTagsResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse Ollama response: {}", e))?;
+
+    Ok(data.models)
+}
+
+
 pub fn get_settings_path(app_handle: &AppHandle) -> PathBuf {
     app_handle
         .path()
@@ -57,11 +116,38 @@ pub fn get_settings_path(app_handle: &AppHandle) -> PathBuf {
         .join("settings.json")
 }
 
+/// Anthropic retired the Claude 3.x models (claude-3-5-haiku-latest 404s
+/// since 2026-02-19). Heal stored settings to the current equivalents so a
+/// stale settings.json doesn't break every LLM call.
+fn heal_legacy_model(settings: &mut AppSettings) {
+    if settings.llm.provider != "anthropic" {
+        return;
+    }
+    let healed = match settings.llm.model.as_str() {
+        m if m.starts_with("claude-3-5-haiku") || m.starts_with("claude-3-haiku") => {
+            Some("claude-haiku-4-5")
+        }
+        m if m.starts_with("claude-3-5-sonnet") || m.starts_with("claude-3-7-sonnet") => {
+            Some("claude-sonnet-5")
+        }
+        m if m.starts_with("claude-3-opus") => Some("claude-opus-4-8"),
+        _ => None,
+    };
+    if let Some(new_model) = healed {
+        eprintln!(
+            "[settings] '{}' is retired on the Anthropic API — using '{}' instead",
+            settings.llm.model, new_model
+        );
+        settings.llm.model = new_model.to_string();
+    }
+}
+
 pub fn load_settings_internal(app_handle: &AppHandle) -> AppSettings {
     let path = get_settings_path(app_handle);
     if path.exists() {
         if let Ok(content) = fs::read_to_string(path) {
-            if let Ok(settings) = serde_json::from_str::<AppSettings>(&content) {
+            if let Ok(mut settings) = serde_json::from_str::<AppSettings>(&content) {
+                heal_legacy_model(&mut settings);
                 return settings;
             }
         }
@@ -80,6 +166,8 @@ pub async fn save_settings(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let mut settings = settings;
+    heal_legacy_model(&mut settings);
     let path = get_settings_path(&app_handle);
 
     // Ensure parent directory exists
@@ -312,9 +400,12 @@ pub fn start_proxy_server(app_handle: AppHandle) {
                     final_messages.push(msg);
                 }
 
+                // cognify's structured extraction can produce large JSON —
+                // a 1024-token cap truncates it mid-object and every parse
+                // fails. Default generously; Haiku 4.5 supports up to 64K out.
                 let mut anthropic_req = serde_json::json!({
                     "model": openai_req.model,
-                    "max_tokens": openai_req.max_tokens.unwrap_or(1024),
+                    "max_tokens": openai_req.max_tokens.unwrap_or(8192),
                     "messages": final_messages
                 });
 

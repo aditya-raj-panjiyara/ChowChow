@@ -154,6 +154,30 @@ export async function getSystemInfo(): Promise<{ arch: string; os: string }> {
   return invoke('get_system_info');
 }
 
+export interface OllamaModelDetails {
+  parent_model?: string;
+  format?: string;
+  family?: string;
+  families?: string[];
+  parameter_size?: string;
+  quantization_level?: string;
+}
+
+export interface OllamaModel {
+  name: string;
+  model: string;
+  modified_at: string;
+  size: number;
+  digest: string;
+  details: OllamaModelDetails;
+  capabilities?: string[];
+}
+
+export async function getOllamaModels(endpoint: string): Promise<OllamaModel[]> {
+  return invoke('get_ollama_models', { endpoint });
+}
+
+
 export async function addCustomNode(id: string, name: string, entityType: string): Promise<void> {
   return invoke('add_custom_node', { id, name, entityType });
 }

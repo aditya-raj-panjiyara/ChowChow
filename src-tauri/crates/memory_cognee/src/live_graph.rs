@@ -54,7 +54,72 @@ pub struct GraphDeltaEvent {
     pub rel_type: Option<String>,
     /// For edge_updated: the new `active` flag (false = deprecated).
     pub active: Option<bool>,
+    /// Where this change came from — the document/source or operation origin
+    /// (e.g. "chow_shipments_erp.csv", "Manual correction", "Drift Sentinel").
+    pub source: Option<String>,
+    /// Why this specific node/edge was created, in plain language.
+    pub reason: Option<String>,
     pub ts_ms: u64,
+}
+
+/// Split the current op label (`"Ingest · file.csv"`) into (category, detail).
+/// Returns (None, None) when nothing is running.
+fn op_context() -> (Option<String>, Option<String>) {
+    match crate::trace::current_op_label() {
+        Some(label) => match label.split_once('·') {
+            Some((cat, detail)) => (
+                Some(cat.trim().to_string()),
+                Some(detail.trim().to_string()),
+            ),
+            None => (Some(label.trim().to_string()), None),
+        },
+        None => (None, None),
+    }
+}
+
+/// Derive the (source, reason) provenance pair for a graph mutation from the
+/// active operation, the write kind, and the node's semantic type.
+fn provenance(write: &str, node_type: Option<&str>) -> (Option<String>, Option<String>) {
+    let (category, detail) = op_context();
+    let cat = category.as_deref().unwrap_or("");
+
+    // Audit nodes are self-describing regardless of the enclosing op.
+    if node_type == Some("AuditCorrection") {
+        return (
+            Some("Correction".to_string()),
+            Some("Audit record of a committed correction — preserved, never deleted".to_string()),
+        );
+    }
+
+    match cat {
+        "Ingest" => {
+            let src = detail.clone().unwrap_or_else(|| "an ingested document".to_string());
+            let reason = match write {
+                "node_added" => format!(
+                    "Entity extracted from {src} by cognee's cognify LLM pass"
+                ),
+                "edge_added" => format!(
+                    "Relationship inferred from {src} — the LLM read the text and connected these entities"
+                ),
+                _ => format!("Written while ingesting {src}"),
+            };
+            (detail, Some(reason))
+        }
+        "Correction" => {
+            let reason = match write {
+                "node_added" => "New entity introduced by a human correction",
+                "edge_added" => "Relationship created by a human correction",
+                "edge_updated" => "Relationship deprecated by a human correction (amber-dashed, audit-preserved)",
+                _ => "Graph restructured by a human correction",
+            };
+            (Some("Manual correction".to_string()), Some(reason.to_string()))
+        }
+        "Drift Sentinel" => (
+            Some("Drift Sentinel".to_string()),
+            Some("Graph updated while cross-examining new intel against prior beliefs".to_string()),
+        ),
+        _ => (None, None),
+    }
 }
 
 static CHANNEL: OnceLock<broadcast::Sender<GraphDeltaEvent>> = OnceLock::new();
@@ -92,6 +157,8 @@ fn base_event(kind: &str) -> GraphDeltaEvent {
         to_id: None,
         rel_type: None,
         active: None,
+        source: None,
+        reason: None,
         ts_ms: now_ms(),
     }
 }
@@ -167,19 +234,25 @@ impl LiveGraphDb {
                 raw_type
             };
 
+            let (source, reason) = provenance("node_added", Some(&entity_type));
             let mut ev = base_event("node_added");
             ev.id = Some(id.to_string());
             ev.name = Some(name);
             ev.entity_type = Some(entity_type);
+            ev.source = source;
+            ev.reason = reason;
             emit(ev);
         }
     }
 
     fn emit_edge(&self, source_id: &str, target_id: &str, relationship_name: &str) {
+        let (source, reason) = provenance("edge_added", None);
         let mut ev = base_event("edge_added");
         ev.from_id = Some(source_id.to_string());
         ev.to_id = Some(target_id.to_string());
         ev.rel_type = Some(relationship_name.to_string());
+        ev.source = source;
+        ev.reason = reason;
         emit(ev);
     }
 }
@@ -372,11 +445,14 @@ impl GraphDBTrait for LiveGraphDb {
             .update_edge_property(source_id, target_id, relationship_name, key, value.clone())
             .await?;
         if key == "active" {
+            let (source, reason) = provenance("edge_updated", None);
             let mut ev = base_event("edge_updated");
             ev.from_id = Some(source_id.to_string());
             ev.to_id = Some(target_id.to_string());
             ev.rel_type = Some(relationship_name.to_string());
             ev.active = value.as_bool();
+            ev.source = source;
+            ev.reason = reason;
             emit(ev);
         }
         Ok(())

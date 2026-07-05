@@ -68,6 +68,17 @@ fn current_op() -> (String, String) {
         .unwrap_or_else(|| ("background".to_string(), "Background".to_string()))
 }
 
+/// The label of the operation currently in progress, e.g.
+/// `"Ingest · chow_shipments_erp.csv"` or `"Correction · …"`. Returns `None`
+/// when nothing is running (the background default). Used to tag graph
+/// mutations with the source and reason they were created.
+pub fn current_op_label() -> Option<String> {
+    OP_STACK
+        .lock()
+        .ok()
+        .and_then(|s| s.last().map(|(_, label)| label.clone()))
+}
+
 fn emit(kind: &str, label: impl Into<String>, detail: impl Into<String>, duration_ms: Option<u64>) {
     let (op_id, op_label) = current_op();
     let event = TraceEvent {
