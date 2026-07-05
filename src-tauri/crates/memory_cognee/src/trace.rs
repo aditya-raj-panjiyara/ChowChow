@@ -219,6 +219,43 @@ impl Llm for TracedLlm {
             .inner
             .create_structured_output_with_messages_raw(messages, json_schema, options)
             .await;
+
+        // Recover from deserialization errors caused by LLM wrapping JSON in markdown code blocks
+        let result = match result {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("DeserializationError") || err_str.contains("deserialize") {
+                    if let Some(raw_start) = err_str.find("Raw: ") {
+                        let raw_content = &err_str[raw_start + 5..];
+                        let mut cleaned = raw_content.trim();
+                        if cleaned.starts_with("```") {
+                            if let Some(first_newline) = cleaned.find('\n') {
+                                cleaned = &cleaned[first_newline + 1..];
+                            } else {
+                                cleaned = cleaned.trim_start_matches('`').trim_start_matches("json").trim_start_matches("JSON");
+                            }
+                        }
+                        if cleaned.ends_with("```") {
+                            cleaned = &cleaned[..cleaned.len() - 3];
+                        }
+                        let cleaned = cleaned.trim();
+                        match serde_json::from_str::<serde_json::Value>(cleaned) {
+                            Ok(parsed) => {
+                                eprintln!("[cognee-trace] Recovered LLM JSON by stripping markdown code blocks");
+                                Ok(parsed)
+                            }
+                            Err(_) => Err(e),
+                        }
+                    } else {
+                        Err(e)
+                    }
+                } else {
+                    Err(e)
+                }
+            }
+        };
+
         let ms = started.elapsed().as_millis() as u64;
         match &result {
             Ok(v) => emit(

@@ -43,6 +43,7 @@ const entityTypeColors: Record<EntityType, { header: string; headerText: string;
   factory: { header: '#4A3D32', headerText: '#D4C4A8', border: '#6A5842' },
   material: { header: '#3D2D5A', headerText: '#C4A8E6', border: '#5A3D7A' },
   customer: { header: '#5A4A2D', headerText: '#E6D4A8', border: '#7A6A3D' },
+  transit: { header: '#1E4E5A', headerText: '#A8E2E6', border: '#2D7585' },
 };
 
 const entityTypeLabels: Record<EntityType, string> = {
@@ -51,6 +52,7 @@ const entityTypeLabels: Record<EntityType, string> = {
   factory: '🔧 Factory',
   material: '📦 Material',
   customer: '👤 Customer',
+  transit: '🚚 Transit',
 };
 
 const severityColors = {
@@ -192,7 +194,7 @@ export default function GraphNode({
             <animate attributeName="opacity" values="0.9;0.3;0.9" dur="2.2s" repeatCount="indefinite" />
           </rect>
           <g transform={`translate(${nodeWidth / 2}, ${-12})`}>
-            <rect x={-58} y={-10} width={116} height={17} rx={8.5} fill="rgba(232,162,61,0.16)" stroke="var(--signal-amber)" strokeWidth={0.75} />
+            <rect x={-73} y={-10} width={146} height={17} rx={8.5} fill="rgba(232,162,61,0.16)" stroke="var(--signal-amber)" strokeWidth={0.75} />
             <text x={0} y={2.5} textAnchor="middle" fontSize={8.5} fontWeight={700} letterSpacing="0.08em" fill="var(--signal-amber)" fontFamily="'JetBrains Mono', monospace">
               ⚠ SINGLE POINT OF FAILURE
             </text>
@@ -248,16 +250,52 @@ export default function GraphNode({
       <text x={12} y={headerHeight / 2 + 1} dominantBaseline="middle" fill={colors.headerText} fontSize={10.5} fontFamily="'Inter Tight', sans-serif" fontWeight={600}>
         {entityTypeLabels[node.entity.type]}
       </text>
+      {node.entity.status && (() => {
+        const textStr = node.entity.status.toUpperCase();
+        const pillWidth = Math.max(48, textStr.length * 6 + 10);
+        return (
+          <g transform={`translate(${nodeWidth - pillWidth - 10}, ${headerHeight / 2 - 6.5})`}>
+            <rect
+              width={pillWidth}
+              height={13}
+              rx={3}
+              fill="rgba(240,68,56,0.18)"
+              stroke="var(--signal-red)"
+              strokeWidth={0.75}
+            />
+            <text
+              x={pillWidth / 2}
+              y={6.5}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fill="var(--signal-red)"
+              fontSize={7.5}
+              fontWeight={800}
+              letterSpacing="0.05em"
+              fontFamily="'JetBrains Mono', monospace"
+            >
+              {textStr}
+            </text>
+          </g>
+        );
+      })()}
       {node.pinned && (
-        <text x={nodeWidth - 20} y={headerHeight / 2 + 1} dominantBaseline="middle" fill={colors.headerText} fontSize={10} opacity={0.7}>
+        <text
+          x={node.entity.status ? nodeWidth - Math.max(48, node.entity.status.length * 6 + 10) - 24 : nodeWidth - 20}
+          y={headerHeight / 2 + 1}
+          dominantBaseline="middle"
+          fill={colors.headerText}
+          fontSize={10}
+          opacity={0.7}
+        >
           📌
         </text>
       )}
 
       {/* Name */}
       <text x={12} y={headerHeight + 21} fill="var(--text-primary)" fontSize={13} fontFamily="'Inter', sans-serif" fontWeight={600}>
-        {node.entity.name.length > Math.floor(nodeWidth / 8.5)
-          ? node.entity.name.substring(0, Math.floor(nodeWidth / 8.5) - 1) + '…'
+        {node.entity.name.length > Math.floor(nodeWidth / 9.8)
+          ? node.entity.name.substring(0, Math.floor(nodeWidth / 9.8) - 1) + '…'
           : node.entity.name}
       </text>
 

@@ -65,6 +65,8 @@ export default function GraphCanvas({
   const [zoom, setZoom] = useState(1);
   const [layoutNonce, setLayoutNonce] = useState(0);
 
+  const [layoutMode, setLayoutMode] = useState<'free' | 'board'>('free');
+
   const [connectingSourceId, setConnectingSourceId] = useState<string | null>(null);
   const [connectionTargetPos, setConnectionTargetPos] = useState<{ x: number; y: number } | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
@@ -171,10 +173,10 @@ export default function GraphCanvas({
     }
     setNodes(initialNodes);
 
-    const cleanup = simulate(initialNodes, relationships, updated => setNodes(updated), { gentle: incremental });
+    const cleanup = simulate(initialNodes, relationships, updated => setNodes(updated), { gentle: incremental, layoutMode });
     return cleanup;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dimensions.width, dimensions.height, entities.length, relationships.length, layoutNonce]);
+  }, [dimensions.width, dimensions.height, entities.length, relationships.length, layoutNonce, layoutMode]);
 
   // Re-center on a requested node (Critical Dependencies / search / deep link).
   // The request may arrive before the simulation has nodes — keep it pending
@@ -398,6 +400,83 @@ export default function GraphCanvas({
           <rect className="canvas-bg" width="100%" height="100%" fill="url(#comfy-grid-large)" />
 
           <g transform={transform}>
+            {/* Board View Lane Backgrounds & Header Cards */}
+            {layoutMode === 'board' && (
+              <g style={{ pointerEvents: 'none' }}>
+                {(() => {
+                  const columns = [
+                    { type: 'material', label: '📦 Materials', color: 'var(--entity-material)' },
+                    { type: 'supplier', label: '🏭 Suppliers', color: 'var(--entity-supplier)' },
+                    { type: 'transit', label: '🚚 Transit', color: 'var(--entity-transit)' },
+                    { type: 'port', label: '⚓ Ports', color: 'var(--entity-port)' },
+                    { type: 'factory', label: '🔧 Factories', color: 'var(--entity-factory)' },
+                    { type: 'customer', label: '👤 Customers', color: 'var(--entity-customer)' },
+                  ];
+
+                  return columns.map((col, idx) => {
+                    const cx = idx * 450 + 200;
+                    const laneWidth = 400;
+                    const leftX = cx - laneWidth / 2;
+                    const nodeCount = nodes.filter(n => n.entity.type === col.type).length;
+
+                    return (
+                      <g key={col.type}>
+                        {/* Semi-transparent column background lane */}
+                        <rect
+                          x={leftX}
+                          y={-2000}
+                          width={laneWidth}
+                          height={6000}
+                          fill={col.color}
+                          opacity={0.035}
+                          rx={16}
+                        />
+                        {/* Lane divider line */}
+                        {idx < 5 && (
+                          <line
+                            x1={cx + 225}
+                            y1={-2000}
+                            x2={cx + 225}
+                            y2={4000}
+                            stroke="var(--border-hairline)"
+                            strokeWidth={1.5}
+                            strokeDasharray="8 6"
+                            opacity={0.3}
+                          />
+                        )}
+                        {/* Lane Header Card */}
+                        <g transform={`translate(${cx}, -60)`}>
+                          <rect
+                            x={-120}
+                            y={-20}
+                            width={240}
+                            height={40}
+                            rx={8}
+                            fill="var(--bg-surface)"
+                            stroke={col.color}
+                            strokeWidth={1.5}
+                            opacity={0.8}
+                          />
+                          <text
+                            x={0}
+                            y={0}
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            fill="var(--text-primary)"
+                            fontSize={13}
+                            fontWeight={700}
+                            fontFamily="'Inter Tight', sans-serif"
+                          >
+                            {col.label} <tspan fill="var(--text-muted)" fontSize={11} fontWeight={500}>({nodeCount})</tspan>
+                          </text>
+                        </g>
+                      </g>
+                    );
+                  });
+                })()}
+              </g>
+            )}
+
             <g>
               {relationships.map(rel => (
                 <GraphEdge
@@ -470,6 +549,14 @@ export default function GraphCanvas({
           { label: '+', title: 'Zoom in', action: () => zoomBy(1.25) },
           { label: '−', title: 'Zoom out', action: () => zoomBy(0.8) },
           { label: '⛶', title: 'Fit to view', action: fitView },
+          {
+            label: layoutMode === 'board' ? '⚛' : '◫',
+            title: layoutMode === 'board' ? 'Switch to network view' : 'Switch to board column view',
+            action: () => {
+              positionMemoryRef.current.clear();
+              setLayoutMode(prev => prev === 'free' ? 'board' : 'free');
+            }
+          },
           { label: '↺', title: 'Re-run layout', action: () => setLayoutNonce(v => v + 1) },
         ].map(btn => (
           <button

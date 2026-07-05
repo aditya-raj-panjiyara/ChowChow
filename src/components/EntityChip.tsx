@@ -15,6 +15,7 @@ const entityTypeColors: Record<EntityType, string> = {
   factory: 'var(--entity-factory)',
   material: 'var(--entity-material)',
   customer: 'var(--entity-customer)',
+  transit: 'var(--entity-transit)',
 };
 
 /**

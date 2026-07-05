@@ -186,10 +186,60 @@ impl CogneeMemoryEngine {
         // Default cognify config
         let cognify_config = Arc::new(CognifyConfig::default());
 
-        // Default ontology resolver (No-Op is the default when no file is supplied)
-        let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(
-            cognee_lib::ontology::NoOpOntologyResolver::new()
-        );
+        // Configure RDF/OWL Ontology Enforcement
+        let ontology_path = app_config.storage_root.join("ontology.ttl");
+        if !ontology_path.exists() {
+            // Write default embedded ontology if not exists
+            let default_ttl = r#"@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix sc: <http://supplychain.org/ontology#> .
+
+sc:Material rdf:type owl:Class ;
+    rdfs:label "Material" .
+
+sc:Supplier rdf:type owl:Class ;
+    rdfs:label "Supplier" .
+
+sc:Port rdf:type owl:Class ;
+    rdfs:label "Port" .
+
+sc:Factory rdf:type owl:Class ;
+    rdfs:label "Factory" .
+
+sc:Customer rdf:type owl:Class ;
+    rdfs:label "Customer" .
+
+sc:supplies rdf:type owl:ObjectProperty ;
+    rdfs:label "supplies" ;
+    rdfs:domain sc:Supplier ;
+    rdfs:range sc:Material .
+
+sc:ships_via rdf:type owl:ObjectProperty ;
+    rdfs:label "ships_via" ;
+    rdfs:domain sc:Material ;
+    rdfs:range sc:Port .
+
+sc:stored_in rdf:type owl:ObjectProperty ;
+    rdfs:label "stored_in" ;
+    rdfs:domain sc:Material ;
+    rdfs:range sc:Factory .
+
+sc:fulfills rdf:type owl:ObjectProperty ;
+    rdfs:label "fulfills" ;
+    rdfs:domain sc:Factory ;
+    rdfs:range sc:Customer .
+"#;
+            let _ = std::fs::write(&ontology_path, default_ttl);
+        }
+
+        let ontology_resolver: Arc<dyn OntologyResolver> = match cognee_lib::ontology::RdfLibOntologyResolver::new(ontology_path) {
+            Ok(resolver) => Arc::new(resolver),
+            Err(e) => {
+                eprintln!("Failed to load RdfLibOntologyResolver, falling back to NoOp: {e:?}");
+                Arc::new(cognee_lib::ontology::NoOpOntologyResolver::new())
+            }
+        };
 
         let owner_id = Uuid::new_v4(); // Default owner for single-user desktop app
 
@@ -314,6 +364,26 @@ struct CreateOp {
     relationship: String,
 }
 
+fn preprocess_text(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '/' {
+            let prev_ok = i > 0 && chars[i - 1].is_alphanumeric();
+            let next_ok = i + 1 < chars.len() && chars[i + 1].is_alphanumeric();
+            if prev_ok && next_ok {
+                result.push_str(" and ");
+                i += 1;
+                continue;
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+    result
+}
+
 #[async_trait]
 impl MemoryEngine for CogneeMemoryEngine {
     /// Maps to `cognee_lib::api::remember()` — add + cognify + optional improve.
@@ -332,9 +402,10 @@ impl MemoryEngine for CogneeMemoryEngine {
         let op = trace::begin_op(format!("Ingest · {file_name}"));
 
         // Read file content to pass as DataInput::Text
-        let content = tokio::fs::read_to_string(path)
+        let raw_content = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| MemoryError::IngestionFailed(format!("cannot read file: {e}")))?;
+        let content = preprocess_text(&raw_content);
         trace::stage("read file", format!("{} chars from {file_name}", content.chars().count()));
         trace::stage(
             "remember() pipeline",
@@ -569,6 +640,11 @@ impl MemoryEngine for CogneeMemoryEngine {
             if node_type == "EntityType" {
                 if let Some(name) = props.get(&Cow::Borrowed("name")).and_then(|v| v.as_str()) {
                     type_name_by_id.insert(id.clone(), name.to_string());
+                    type_name_by_id.insert(id.replace("-", "").to_lowercase(), name.to_string());
+                    if let Some(attr_id) = props.get(&Cow::Borrowed("id")).and_then(|v| v.as_str()) {
+                        type_name_by_id.insert(attr_id.to_string(), name.to_string());
+                        type_name_by_id.insert(attr_id.replace("-", "").to_lowercase(), name.to_string());
+                    }
                 }
             }
         }
@@ -592,7 +668,11 @@ impl MemoryEngine for CogneeMemoryEngine {
                     props
                         .get(&Cow::Borrowed("is_a"))
                         .and_then(|v| v.as_str())
-                        .and_then(|type_id| type_name_by_id.get(type_id))
+                        .and_then(|type_id| {
+                            type_name_by_id
+                                .get(type_id)
+                                .or_else(|| type_name_by_id.get(&type_id.replace("-", "").to_lowercase()))
+                        })
                         .cloned()
                         .unwrap_or(raw_type)
                 } else {

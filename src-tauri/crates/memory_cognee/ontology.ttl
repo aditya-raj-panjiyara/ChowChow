@@ -1,0 +1,39 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix sc: <http://supplychain.org/ontology#> .
+
+sc:Material rdf:type owl:Class ;
+    rdfs:label "Material" .
+
+sc:Supplier rdf:type owl:Class ;
+    rdfs:label "Supplier" .
+
+sc:Port rdf:type owl:Class ;
+    rdfs:label "Port" .
+
+sc:Factory rdf:type owl:Class ;
+    rdfs:label "Factory" .
+
+sc:Customer rdf:type owl:Class ;
+    rdfs:label "Customer" .
+
+sc:supplies rdf:type owl:ObjectProperty ;
+    rdfs:label "supplies" ;
+    rdfs:domain sc:Supplier ;
+    rdfs:range sc:Material .
+
+sc:ships_via rdf:type owl:ObjectProperty ;
+    rdfs:label "ships_via" ;
+    rdfs:domain sc:Material ;
+    rdfs:range sc:Port .
+
+sc:stored_in rdf:type owl:ObjectProperty ;
+    rdfs:label "stored_in" ;
+    rdfs:domain sc:Material ;
+    rdfs:range sc:Factory .
+
+sc:fulfills rdf:type owl:ObjectProperty ;
+    rdfs:label "fulfills" ;
+    rdfs:domain sc:Factory ;
+    rdfs:range sc:Customer .

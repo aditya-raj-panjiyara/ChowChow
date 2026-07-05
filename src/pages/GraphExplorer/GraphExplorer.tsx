@@ -7,7 +7,6 @@ import GraphSearch from './GraphSearch';
 import GraphFilters from './GraphFilters';
 import NodeModal from './NodeModal';
 import { analyzeGraph, topCritical } from './graphAnalytics';
-import { demoEntities, demoRelationships } from '../../data/demoData';
 import {
   getGraphSnapshot,
   addCustomNode,
@@ -19,45 +18,7 @@ import {
   type BlastRadiusResult,
 } from '../../lib/tauri';
 import type { Entity, EntityType, Relationship } from '../../types';
-
-const ENTITY_TYPE_MAP: Record<string, EntityType> = {
-  supplier: 'supplier',
-  vendor: 'supplier',
-  organization: 'supplier',
-  company: 'supplier',
-  business: 'supplier',
-  distributor: 'supplier',
-  port: 'port',
-  location: 'port',
-  place: 'port',
-  city: 'port',
-  depot: 'port',
-  route: 'port',
-  factory: 'factory',
-  warehouse: 'factory',
-  facility: 'factory',
-  plant: 'factory',
-  building: 'factory',
-  material: 'material',
-  product: 'material',
-  item: 'material',
-  goods: 'material',
-  substance: 'material',
-  customer: 'customer',
-  person: 'customer',
-  people: 'customer',
-  group: 'customer',
-  buyer: 'customer',
-};
-
-function mapEntityType(raw: string): EntityType {
-  const key = raw.toLowerCase();
-  if (ENTITY_TYPE_MAP[key]) return ENTITY_TYPE_MAP[key];
-  for (const [fragment, mapped] of Object.entries(ENTITY_TYPE_MAP)) {
-    if (key.includes(fragment)) return mapped;
-  }
-  return 'supplier';
-}
+import { mapEntityType } from '../../lib/entityTypes';
 
 const usd = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -72,6 +33,7 @@ const typeDotColors: Record<EntityType, string> = {
   factory: '#C9A227',
   material: '#9B7FD4',
   customer: '#D4A45F',
+  transit: '#4B9CA8',
 };
 
 interface Toast {
@@ -81,8 +43,8 @@ interface Toast {
 
 export default function GraphExplorer() {
   const navigate = useNavigate();
-  const [entities, setEntities] = useState<Entity[]>(demoEntities);
-  const [relationships, setRelationships] = useState<Relationship[]>(demoRelationships);
+  const [entities, setEntities] = useState<Entity[]>([]);
+  const [relationships, setRelationships] = useState<Relationship[]>([]);
   // True when the BACKEND says the graph is empty — we show an honest empty
   // state, never simulated nodes (those masquerade as real data and can't
   // be deleted, which reads as the app "adding" phantom nodes).
@@ -98,21 +60,93 @@ export default function GraphExplorer() {
         return;
       }
       setBackendEmpty(false);
-      const mapped: Entity[] = snapshot.entities.map(e => ({
-        id: e.id,
-        name: e.name,
-        type: mapEntityType(e.entity_type),
-        connectionCount: snapshot.relationships.filter(r => r.from_id === e.id || r.to_id === e.id).length,
-      }));
-      const mappedRels: Relationship[] = snapshot.relationships.map((r, i) => ({
-        id: `r-${i}`,
-        sourceId: r.from_id,
-        targetId: r.to_id,
-        label: r.relationship_type,
-        deprecated: !r.active,
-        weight: r.weight,
-      }));
-      setEntities(mapped);
+
+      // Deduplicate entities by name (case-insensitive) and build ID redirection map
+      const nameToId = new Map<string, string>();
+      const idRedirection = new Map<string, string>();
+      const uniqueEntities: Entity[] = [];
+
+      // Map status relationships (e.g. Port of Bangkok -> has_status -> Delay)
+      const statusMap = new Map<string, string>();
+      const statusNodeIds = new Set<string>();
+
+      for (const e of snapshot.entities) {
+        const normName = e.name.trim().toLowerCase();
+        if (
+          normName === 'delay' ||
+          normName === 'disruption' ||
+          normName === 'unreachable' ||
+          normName === 'status' ||
+          normName === 'warning' ||
+          normName === 'customs crackdown' ||
+          e.entity_type.trim().toLowerCase() === 'status'
+        ) {
+          statusNodeIds.add(e.id);
+        }
+      }
+
+      for (const r of snapshot.relationships) {
+        if (statusNodeIds.has(r.to_id)) {
+          const statusNode = snapshot.entities.find(e => e.id === r.to_id);
+          if (statusNode) {
+            statusMap.set(r.from_id, statusNode.name);
+          }
+        }
+      }
+
+      for (const e of snapshot.entities) {
+        if (statusNodeIds.has(e.id)) {
+          continue;
+        }
+
+        const normName = e.name.trim().toLowerCase();
+        if (nameToId.has(normName)) {
+          const primaryId = nameToId.get(normName)!;
+          idRedirection.set(e.id, primaryId);
+        } else {
+          nameToId.set(normName, e.id);
+          idRedirection.set(e.id, e.id);
+          uniqueEntities.push({
+            id: e.id,
+            name: e.name,
+            type: mapEntityType(e.entity_type, e.name),
+            connectionCount: 0,
+            status: statusMap.get(e.id),
+          });
+        }
+      }
+
+      const mappedRels: Relationship[] = [];
+      const seenRels = new Set<string>();
+
+      for (const r of snapshot.relationships) {
+        const sourceId = idRedirection.get(r.from_id) || r.from_id;
+        const targetId = idRedirection.get(r.to_id) || r.to_id;
+
+        if (sourceId === targetId) continue;
+
+        const relKey = `${sourceId}->${targetId}:${r.relationship_type}`;
+        if (seenRels.has(relKey)) continue;
+        seenRels.add(relKey);
+
+        mappedRels.push({
+          id: `r-${mappedRels.length}`,
+          sourceId,
+          targetId,
+          label: r.relationship_type,
+          deprecated: !r.active,
+          weight: r.weight,
+        });
+      }
+
+      // Re-calculate connection counts for the unique entities
+      for (const e of uniqueEntities) {
+        e.connectionCount = mappedRels.filter(
+          r => r.sourceId === e.id || r.targetId === e.id
+        ).length;
+      }
+
+      setEntities(uniqueEntities);
       setRelationships(mappedRels);
     } catch {
       // Backend not running — keep demo data
@@ -152,11 +186,31 @@ export default function GraphExplorer() {
     if (d.kind === 'node_added' && d.id && d.name) {
       // Audit nodes are query overlay machinery, not supply-chain entities.
       if (d.entity_type === 'AuditCorrection') return { applied: 'other' };
+
+      const normName = d.name.trim().toLowerCase();
+      // Filter out abstract status/event nodes
+      if (
+        normName === 'delay' ||
+        normName === 'disruption' ||
+        normName === 'unreachable' ||
+        normName === 'status' ||
+        normName === 'warning' ||
+        normName === 'customs crackdown' ||
+        (d.entity_type || '').trim().toLowerCase() === 'status'
+      ) {
+        return { applied: 'other' };
+      }
+
       if (entitiesRef.current.some(e => e.id === d.id)) return { applied: 'other' };
+
+      if (entitiesRef.current.some(e => e.name.trim().toLowerCase() === normName)) {
+        return { applied: 'other' };
+      }
+
       setEntities(prev => [...prev, {
         id: d.id!,
         name: d.name!,
-        type: mapEntityType(d.entity_type ?? ''),
+        type: mapEntityType(d.entity_type ?? '', d.name!),
         connectionCount: 0,
       }]);
       markFresh('node', d.id);
@@ -164,24 +218,34 @@ export default function GraphExplorer() {
     }
 
     if (d.kind === 'edge_added' && d.from_id && d.to_id && d.rel_type) {
+      let sourceId = d.from_id;
+      let targetId = d.to_id;
+
+      const sourceNode = entitiesRef.current.find(e => e.id === sourceId || e.name.trim().toLowerCase() === (d.from_id || '').trim().toLowerCase());
+      const targetNode = entitiesRef.current.find(e => e.id === targetId || e.name.trim().toLowerCase() === (d.to_id || '').trim().toLowerCase());
+
+      if (sourceNode) sourceId = sourceNode.id;
+      if (targetNode) targetId = targetNode.id;
+
       const known = new Set(entitiesRef.current.map(e => e.id));
-      // Plumbing edges (chunk/document links) reference filtered-out nodes.
-      if (!known.has(d.from_id) || !known.has(d.to_id)) return { applied: 'other' };
+      if (!known.has(sourceId) || !known.has(targetId)) return { applied: 'other' };
+      if (sourceId === targetId) return { applied: 'other' };
+
       const exists = relationshipsRef.current.some(
-        r => r.sourceId === d.from_id && r.targetId === d.to_id && r.label === d.rel_type,
+        r => r.sourceId === sourceId && r.targetId === targetId && r.label === d.rel_type,
       );
       if (exists) return { applied: 'other' };
       const relId = `live-${d.seq}`;
       setRelationships(prev => [...prev, {
         id: relId,
-        sourceId: d.from_id!,
-        targetId: d.to_id!,
+        sourceId,
+        targetId,
         label: d.rel_type!,
         deprecated: false,
         weight: 1,
       }]);
       setEntities(prev => prev.map(e =>
-        e.id === d.from_id || e.id === d.to_id
+        e.id === sourceId || e.id === targetId
           ? { ...e, connectionCount: e.connectionCount + 1 }
           : e,
       ));
@@ -189,14 +253,23 @@ export default function GraphExplorer() {
       const nameOf = (id: string) => entitiesRef.current.find(e => e.id === id)?.name ?? id;
       return {
         applied: 'edge',
-        label: `${nameOf(d.from_id)} → ${nameOf(d.to_id)}`,
+        label: `${nameOf(sourceId)} → ${nameOf(targetId)}`,
         detail: d.rel_type,
       };
     }
 
     if (d.kind === 'edge_updated' && d.from_id && d.to_id && d.active === false) {
+      let sourceId = d.from_id;
+      let targetId = d.to_id;
+
+      const sourceNode = entitiesRef.current.find(e => e.id === sourceId || e.name.trim().toLowerCase() === (d.from_id || '').trim().toLowerCase());
+      const targetNode = entitiesRef.current.find(e => e.id === targetId || e.name.trim().toLowerCase() === (d.to_id || '').trim().toLowerCase());
+
+      if (sourceNode) sourceId = sourceNode.id;
+      if (targetNode) targetId = targetNode.id;
+
       setRelationships(prev => prev.map(r =>
-        r.sourceId === d.from_id && r.targetId === d.to_id && (!d.rel_type || r.label === d.rel_type)
+        r.sourceId === sourceId && r.targetId === targetId && (!d.rel_type || r.label === d.rel_type)
           ? { ...r, deprecated: true }
           : r,
       ));
@@ -220,7 +293,7 @@ export default function GraphExplorer() {
   }, [liveActive, liveChanges.length]);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [activeFilters, setActiveFilters] = useState<EntityType[]>(['supplier', 'port', 'factory', 'material', 'customer']);
+  const [activeFilters, setActiveFilters] = useState<EntityType[]>(['supplier', 'port', 'factory', 'material', 'customer', 'transit']);
   const [showDeprecated, setShowDeprecated] = useState(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null);
   const [editingEntityId, setEditingEntityId] = useState<string | null>(null);
@@ -417,7 +490,7 @@ export default function GraphExplorer() {
     <div className="full-bleed">
       {/* Floating toolbar */}
       <div className="graph-search-bar">
-        <GraphSearch onSelectEntity={focusOn} />
+        <GraphSearch entities={entities} onSelectEntity={focusOn} />
         <GraphFilters
           activeFilters={activeFilters}
           showDeprecated={showDeprecated}

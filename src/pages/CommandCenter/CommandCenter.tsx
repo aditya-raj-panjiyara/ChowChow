@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react';
 import RiskPosture from './RiskPosture';
 import ActiveAlerts from './ActiveAlerts';
 import RecentActivity from './RecentActivity';
-import { demoAlerts, demoActivity } from '../../data/demoData';
-import { listAlerts } from '../../lib/tauri';
+import { listAlerts, getIngestionStatus, listCorrections } from '../../lib/tauri';
 import type { Alert, AlertSeverity, RiskStatus } from '../../types';
 
 /**
@@ -15,7 +14,8 @@ import type { Alert, AlertSeverity, RiskStatus } from '../../types';
  * shows when the backend has no alerts yet.
  */
 export default function CommandCenter() {
-  const [alerts, setAlerts] = useState<Alert[]>(demoAlerts);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [activity, setActivity] = useState<any[]>([]);
   const [isLive, setIsLive] = useState(false);
 
   useEffect(() => {
@@ -24,7 +24,10 @@ export default function CommandCenter() {
     const load = async () => {
       try {
         const backendAlerts = await listAlerts();
-        if (cancelled || backendAlerts.length === 0) return;
+        const jobs = await getIngestionStatus().catch(() => []);
+        const corrections = await listCorrections().catch(() => []);
+        if (cancelled) return;
+
         const severityMap: Record<string, AlertSeverity> = {
           critical: 'critical',
           elevated: 'elevated',
@@ -41,9 +44,32 @@ export default function CommandCenter() {
             suggestedCorrection: a.suggested_correction ?? undefined,
           })),
         );
+
+        let activityList: any[] = [];
+        for (const job of jobs) {
+          activityList.push({
+            id: job.id,
+            type: 'upload',
+            description: job.status === 'success'
+              ? `Successfully ingested ${job.file_path.split('/').pop()}`
+              : `Failed to ingest ${job.file_path.split('/').pop()}: ${job.error_message ?? 'Unknown error'}`,
+            timestamp: job.completed_at || job.created_at,
+          });
+        }
+        for (const c of corrections) {
+          activityList.push({
+            id: c.id,
+            type: 'correction',
+            description: `Correction submitted by ${c.author}: "${c.raw_text.length > 50 ? c.raw_text.substring(0, 47) + '...' : c.raw_text}" (Status: ${c.status})`,
+            timestamp: c.created_at,
+          });
+        }
+
+        activityList.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setActivity(activityList.slice(0, 10));
         setIsLive(true);
       } catch {
-        // Backend not running — keep demo data
+        // Keep empty
       }
     };
 
@@ -65,7 +91,7 @@ export default function CommandCenter() {
     <div className="grid-3-col">
       <RiskPosture status={riskStatus} />
       <ActiveAlerts alerts={alerts} isLive={isLive} />
-      <RecentActivity items={demoActivity} />
+      <RecentActivity items={activity} />
     </div>
   );
 }

@@ -3,7 +3,7 @@
    ============================================================ */
 
 /** Entity types in the supply chain knowledge graph */
-export type EntityType = 'supplier' | 'port' | 'factory' | 'material' | 'customer';
+export type EntityType = 'supplier' | 'port' | 'factory' | 'material' | 'customer' | 'transit';
 
 /** Entity node in the knowledge graph */
 export interface Entity {
@@ -16,6 +16,7 @@ export interface Entity {
   connectionCount: number;
   /** Whether this entity has correction history */
   hasCorrectionHistory?: boolean;
+  status?: string;
 }
 
 /** Relationship between two entities */

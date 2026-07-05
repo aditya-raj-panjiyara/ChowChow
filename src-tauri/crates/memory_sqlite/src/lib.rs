@@ -52,6 +52,26 @@ impl SqliteStubEngine {
     }
 }
 
+fn preprocess_text(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '/' {
+            let prev_ok = i > 0 && chars[i - 1].is_alphanumeric();
+            let next_ok = i + 1 < chars.len() && chars[i + 1].is_alphanumeric();
+            if prev_ok && next_ok {
+                result.push_str(" and ");
+                i += 1;
+                continue;
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+    result
+}
+
 #[async_trait]
 impl MemoryEngine for SqliteStubEngine {
     /// STUB: Basic regex-based entity extraction from file contents.
@@ -65,9 +85,10 @@ impl MemoryEngine for SqliteStubEngine {
         _source_type: SourceType,
     ) -> Result<IngestSummary, MemoryError> {
         // Read the file
-        let content = tokio::fs::read_to_string(path)
+        let raw_content = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| MemoryError::IngestionFailed(format!("cannot read file: {e}")))?;
+        let content = preprocess_text(&raw_content);
 
         let mut entities_extracted: u32 = 0;
         let mut relationships_extracted: u32 = 0;
@@ -83,34 +104,32 @@ impl MemoryEngine for SqliteStubEngine {
                 let cleaned: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
                 if cleaned.len() >= 3 && cleaned.chars().next().map_or(false, |c| c.is_uppercase())
                 {
-                    let entity_id = Uuid::new_v4().to_string();
                     let name = cleaned;
 
-                    // Insert entity (ignore duplicates by name — stub behavior)
-                    let result = sqlx::query(
-                        "INSERT OR IGNORE INTO stub_entities (id, entity_type, name, attributes) \
-                         VALUES (?, 'Unknown', ?, '{}')",
-                    )
-                    .bind(&entity_id)
-                    .bind(&name)
-                    .execute(&self.pool)
-                    .await
-                    .map_err(|e| MemoryError::Storage(e.to_string()))?;
+                    // Check if entity already exists by name
+                    let row: Option<(String,)> =
+                        sqlx::query_as("SELECT id FROM stub_entities WHERE name = ?")
+                            .bind(&name)
+                            .fetch_optional(&self.pool)
+                            .await
+                            .map_err(|e| MemoryError::Storage(e.to_string()))?;
 
-                    if result.rows_affected() > 0 {
+                    if let Some((existing_id,)) = row {
+                        ids_in_line.push(existing_id);
+                    } else {
+                        let entity_id = Uuid::new_v4().to_string();
+                        sqlx::query(
+                            "INSERT INTO stub_entities (id, entity_type, name, attributes) \
+                             VALUES (?, 'Unknown', ?, '{}')",
+                        )
+                        .bind(&entity_id)
+                        .bind(&name)
+                        .execute(&self.pool)
+                        .await
+                        .map_err(|e| MemoryError::Storage(e.to_string()))?;
+
                         entities_extracted += 1;
                         ids_in_line.push(entity_id);
-                    } else {
-                        // Entity already existed — look up its ID for relationships
-                        let row: Option<(String,)> =
-                            sqlx::query_as("SELECT id FROM stub_entities WHERE name = ?")
-                                .bind(&name)
-                                .fetch_optional(&self.pool)
-                                .await
-                                .map_err(|e| MemoryError::Storage(e.to_string()))?;
-                        if let Some((existing_id,)) = row {
-                            ids_in_line.push(existing_id);
-                        }
                     }
                 }
             }
@@ -219,18 +238,16 @@ impl MemoryEngine for SqliteStubEngine {
 
     /// Returns all entities and relationships from the stub tables.
     async fn get_graph_snapshot(&self) -> Result<GraphSnapshot, MemoryError> {
-        let entity_rows: Vec<(String, String, String, String)> = sqlx::query_as(
-            "SELECT id, entity_type, name, attributes FROM stub_entities",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| MemoryError::Storage(e.to_string()))?;
+        let entity_rows: Vec<(String, String, String, String)> =
+            sqlx::query_as("SELECT id, entity_type, name, attributes FROM stub_entities")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| MemoryError::Storage(e.to_string()))?;
 
         let entities: Vec<MemoryEntity> = entity_rows
             .into_iter()
             .map(|(id, entity_type, name, attrs)| {
-                let attributes =
-                    serde_json::from_str(&attrs).unwrap_or(serde_json::Value::Null);
+                let attributes = serde_json::from_str(&attrs).unwrap_or(serde_json::Value::Null);
                 MemoryEntity {
                     id,
                     entity_type,

@@ -14,6 +14,7 @@ const ENTITY_TYPES: { value: EntityType; label: string }[] = [
   { value: 'factory', label: '🔧 Factory' },
   { value: 'material', label: '📦 Material' },
   { value: 'customer', label: '👤 Customer' },
+  { value: 'transit', label: '🚚 Transit' },
 ];
 
 /**
@@ -31,7 +32,7 @@ export default function NodeModal({ entity, onSave, onClose }: NodeModalProps) {
   // Auto-generate ID for new entities
   const [id] = useState(() => {
     if (entity) return entity.id;
-    const prefix = { supplier: 'SUP', port: 'PRT', factory: 'FAC', material: 'MAT', customer: 'CUS' };
+    const prefix = { supplier: 'SUP', port: 'PRT', factory: 'FAC', material: 'MAT', customer: 'CUS', transit: 'TRN' };
     return `${prefix[type]}-${String(Date.now()).slice(-4)}`;
   });
 

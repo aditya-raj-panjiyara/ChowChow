@@ -4,6 +4,7 @@ import QueryInput from './QueryInput';
 import SuggestedChips from './SuggestedChips';
 import QueryHistory from './QueryHistory';
 import type { QueryMessage, ConfidenceLevel } from '../../types';
+import { mapEntityType } from '../../lib/entityTypes';
 
 const USE_MOCK = false;
 
@@ -148,7 +149,7 @@ export default function QueryAsk() {
         reasoningPath: result.reasoning_path.map(e => ({
           entityId: e.id,
           entityName: e.name,
-          entityType: (e.entity_type.toLowerCase() as any) ?? 'supplier',
+          entityType: mapEntityType(e.entity_type, e.name),
         })),
       };
       setMessages(prev => [...prev, aiResponse]);

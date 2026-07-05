@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
-import { demoEntities } from '../../data/demoData';
+import type { Entity } from '../../types';
 
 interface GraphSearchProps {
+  entities: Entity[];
   onSelectEntity: (id: string) => void;
 }
 
@@ -9,17 +10,17 @@ interface GraphSearchProps {
  * GraphSearch — floating search bar with entity autocomplete.
  * Lives at the top of the graph canvas, not in a sidebar.
  */
-export default function GraphSearch({ onSelectEntity }: GraphSearchProps) {
+export default function GraphSearch({ entities, onSelectEntity }: GraphSearchProps) {
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
 
   const results = useMemo(() => {
     if (!query.trim()) return [];
     const q = query.toLowerCase();
-    return demoEntities.filter(
+    return entities.filter(
       e => e.name.toLowerCase().includes(q) || e.id.toLowerCase().includes(q)
     ).slice(0, 6);
-  }, [query]);
+  }, [query, entities]);
 
   return (
     <div style={{ flex: 1, position: 'relative' }}>

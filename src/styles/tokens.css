@@ -36,6 +36,7 @@
   --entity-factory: #8A8078;    /* Warm grey */
   --entity-material: #8B7BA8;   /* Soft purple */
   --entity-customer: #B8A472;   /* Muted gold */
+  --entity-transit: #4B9CA8;    /* Muted Cyan */
 
   /* Spacing scale */
   --space-xs: 4px;

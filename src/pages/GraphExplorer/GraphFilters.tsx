@@ -9,10 +9,11 @@ interface GraphFiltersProps {
 }
 
 const entityTypes: { type: EntityType; label: string; color: string }[] = [
+  { type: 'material', label: 'Materials', color: 'var(--entity-material)' },
   { type: 'supplier', label: 'Suppliers', color: 'var(--entity-supplier)' },
+  { type: 'transit', label: 'Transit', color: 'var(--entity-transit)' },
   { type: 'port', label: 'Ports', color: 'var(--entity-port)' },
   { type: 'factory', label: 'Factories', color: 'var(--entity-factory)' },
-  { type: 'material', label: 'Materials', color: 'var(--entity-material)' },
   { type: 'customer', label: 'Customers', color: 'var(--entity-customer)' },
 ];
 
