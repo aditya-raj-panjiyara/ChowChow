@@ -6,6 +6,14 @@ use tauri::State;
 pub async fn get_graph_snapshot(
     state: State<'_, AppState>,
 ) -> Result<GraphSnapshot, String> {
+    merged_snapshot(state.inner()).await
+}
+
+/// Engine snapshot merged with the app-level overlay tables (custom nodes and
+/// relationships, tombstoned deletions) — the graph exactly as the user sees
+/// it on the canvas. Shared by the Graph Explorer and the blast radius
+/// simulation so manual edits behave consistently everywhere.
+pub async fn merged_snapshot(state: &AppState) -> Result<GraphSnapshot, String> {
     // 1. Get base snapshot from memory engine
     let mut snapshot = state
         .memory()

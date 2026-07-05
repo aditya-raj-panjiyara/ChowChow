@@ -63,7 +63,7 @@ export default function CommandCenter() {
           activityList.push({
             id: job.id,
             type: 'upload',
-            description: job.status === 'success'
+            description: (job.status === 'complete' || job.status === 'success')
               ? `Successfully ingested ${job.file_path.split('/').pop()}`
               : `Failed to ingest ${job.file_path.split('/').pop()}: ${job.error_message ?? 'Unknown error'}`,
             timestamp: job.completed_at || job.created_at,

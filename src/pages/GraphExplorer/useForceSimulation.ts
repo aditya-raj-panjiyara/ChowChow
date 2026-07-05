@@ -70,7 +70,7 @@ export function useForceSimulation() {
     nodes: SimulationNode[],
     relationships: Relationship[],
     onTick: (nodes: SimulationNode[]) => void,
-    options?: { gentle?: boolean; layoutMode?: 'free' | 'board' }
+    options?: { gentle?: boolean }
   ) => {
     if (frameRef.current) {
       cancelAnimationFrame(frameRef.current);
@@ -93,14 +93,6 @@ export function useForceSimulation() {
         if (n.pinned) continue;
         n.vx = 0;
         n.vy = 0;
-      }
-
-      // Column centering force (Board View)
-      if (options?.layoutMode === 'board') {
-        for (const n of currentNodes) {
-          if (n.pinned) continue;
-          n.vy += (400 - n.y) * 0.05 * alpha;
-        }
       }
 
       // Node repulsion (account for card size)
@@ -144,22 +136,7 @@ export function useForceSimulation() {
       // Apply velocities
       for (const node of currentNodes) {
         if (node.pinned) continue;
-        if (options?.layoutMode === 'board') {
-          const columnMap: Record<string, number> = {
-            material: 0,
-            supplier: 1,
-            transit: 2,
-            port: 3,
-            factory: 4,
-            customer: 5,
-          };
-          const colIdx = columnMap[node.entity.type] ?? 1;
-          const targetX = colIdx * 450 + 200;
-          node.x += (targetX - node.x) * 0.25;
-          node.vx = 0;
-        } else {
-          node.x += node.vx * 0.8;
-        }
+        node.x += node.vx * 0.8;
         node.y += node.vy * 0.8;
       }
 

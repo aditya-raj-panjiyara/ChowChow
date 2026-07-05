@@ -33,7 +33,12 @@ export default function AlertRow({ alert, onDismiss }: AlertRowProps) {
       <SeverityDot severity={alert.severity} />
       <div className="alert-row__content">
         <div className="alert-row__entity">{alert.entityName}</div>
-        <div className="alert-row__description">{alert.description}</div>
+        <div
+          className="alert-row__description"
+          style={isExpanded ? { whiteSpace: 'normal', overflow: 'visible', textOverflow: 'clip', lineHeight: 1.55 } : undefined}
+        >
+          {alert.description}
+        </div>
         {isExpanded && alert.downstreamEntities && alert.downstreamEntities.length > 0 && (
           <div className="alert-row__expand">
             <div style={{ marginBottom: 6, fontWeight: 500, color: 'var(--text-primary)' }}>
@@ -55,10 +60,10 @@ export default function AlertRow({ alert, onDismiss }: AlertRowProps) {
             <div style={{ fontStyle: 'italic', marginBottom: 8 }}>
               “{alert.suggestedCorrection}”
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button
                 className="btn btn--primary"
-                style={{ fontSize: 11, padding: '4px 12px' }}
+                style={{ fontSize: 11, padding: '4px 12px', whiteSpace: 'nowrap' }}
                 onClick={(e) => {
                   e.stopPropagation();
                   // alertId rides along: confirming the correction resolves this alert.
@@ -67,12 +72,12 @@ export default function AlertRow({ alert, onDismiss }: AlertRowProps) {
                   });
                 }}
               >
-                Review & apply correction →
+                Review & apply →
               </button>
               {onDismiss && (
                 <button
                   className="btn btn--ghost"
-                  style={{ fontSize: 11, padding: '4px 12px' }}
+                  style={{ fontSize: 11, padding: '4px 12px', whiteSpace: 'nowrap' }}
                   onClick={(e) => {
                     e.stopPropagation();
                     onDismiss(alert.id);

@@ -118,6 +118,7 @@ export default function GraphCanvas({
   // - Incremental (live growth, filter toggles): placed nodes stay put; each
   //   new node fans out around its first placed neighbor, or around the
   //   periphery of the existing cloud, and the force layout pulls it in.
+  const lastModeRef = useRef<'free' | 'board'>('free');
   useEffect(() => {
     if (dimensions.width <= 0 || dimensions.height <= 0 || entities.length === 0) return;
 
@@ -125,6 +126,74 @@ export default function GraphCanvas({
     if (layoutNonce !== lastLayoutNonceRef.current) {
       lastLayoutNonceRef.current = layoutNonce;
       positionMemoryRef.current.clear();
+    }
+
+    const modeChanged = lastModeRef.current !== layoutMode;
+    lastModeRef.current = layoutMode;
+
+    // Leaving board mode: the position memory holds lane coordinates, which
+    // would freeze the network view into a board shape — start fresh instead.
+    if (modeChanged && layoutMode === 'free') {
+      positionMemoryRef.current.clear();
+    }
+
+    // ── Board mode: deterministic kanban layout ─────────────────────────
+    // No force simulation — each lane stacks its cards top-down (most
+    // critical first) with spacing derived from real card heights, so
+    // overlap is impossible and lanes stay fully segregated.
+    if (layoutMode === 'board') {
+      const laneOrder: string[] = ['material', 'supplier', 'transit', 'port', 'factory', 'customer'];
+      const BOARD_TOP = 40;
+      const BOARD_GAP = 30;
+      const sized = entities.map(e => {
+        const crit = analytics.get(e.id)?.criticality ?? 0;
+        return { entity: e, crit, width: 190 + crit * 80, height: 112 + crit * 26 };
+      });
+      const boardNodes: SimulationNode[] = [];
+      const placeColumn = (items: typeof sized, cx: number) => {
+        let y = BOARD_TOP;
+        for (const s of items) {
+          boardNodes.push({
+            id: s.entity.id,
+            x: cx - s.width / 2,
+            y,
+            vx: 0, vy: 0,
+            entity: s.entity,
+            pinned: false,
+            width: s.width,
+            height: s.height,
+          });
+          y += s.height + BOARD_GAP;
+        }
+      };
+      laneOrder.forEach((type, idx) => {
+        const items = sized
+          .filter(s => s.entity.type === type)
+          .sort((a, b) => b.crit - a.crit || a.entity.name.localeCompare(b.entity.name));
+        placeColumn(items, idx * 450 + 200);
+      });
+      // Never lose nodes whose type has no lane — overflow column on the right.
+      const placed = new Set(boardNodes.map(n => n.id));
+      const overflow = sized.filter(s => !placed.has(s.entity.id));
+      if (overflow.length > 0) placeColumn(overflow, laneOrder.length * 450 + 200);
+
+      setNodes(boardNodes);
+
+      // Entering board mode: fit the whole board (incl. lane headers) once.
+      // Live deltas re-run this effect too — don't yank the viewport then.
+      if (modeChanged && boardNodes.length > 0) {
+        const minX = Math.min(...boardNodes.map(n => n.x)) - 100;
+        const maxX = Math.max(...boardNodes.map(n => n.x + n.width)) + 100;
+        const minY = -140;
+        const maxY = Math.max(...boardNodes.map(n => n.y + n.height)) + 80;
+        const fitZoom = Math.max(0.2, Math.min(1.2, Math.min(dimensions.width / (maxX - minX), dimensions.height / (maxY - minY))));
+        setZoom(fitZoom);
+        setPan({
+          x: (dimensions.width - (maxX + minX) * fitZoom) / 2,
+          y: (dimensions.height - (maxY + minY) * fitZoom) / 2,
+        });
+      }
+      return;
     }
 
     const memory = positionMemoryRef.current;
@@ -173,7 +242,7 @@ export default function GraphCanvas({
     }
     setNodes(initialNodes);
 
-    const cleanup = simulate(initialNodes, relationships, updated => setNodes(updated), { gentle: incremental, layoutMode });
+    const cleanup = simulate(initialNodes, relationships, updated => setNodes(updated), { gentle: incremental });
     return cleanup;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dimensions.width, dimensions.height, entities.length, relationships.length, layoutNonce, layoutMode]);

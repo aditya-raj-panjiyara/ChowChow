@@ -151,6 +151,12 @@ export default function GraphExplorer() {
       const seenRels = new Set<string>();
 
       for (const r of snapshot.relationships) {
+        // Endpoints that were filtered off the canvas (status nodes, audit
+        // records, metadata junk) have no idRedirection entry — dropping
+        // their edges too, otherwise the inspector shows raw UUIDs for
+        // relationships pointing at invisible nodes.
+        if (!idRedirection.has(r.from_id) || !idRedirection.has(r.to_id)) continue;
+
         const sourceId = idRedirection.get(r.from_id) || r.from_id;
         const targetId = idRedirection.get(r.to_id) || r.to_id;
 
@@ -364,7 +370,12 @@ export default function GraphExplorer() {
 
   const [showCriticalPanel, setShowCriticalPanel] = useState(true);
 
-  const analytics = useMemo(() => analyzeGraph(entities, relationships), [entities, relationships]);
+  // Criticality / SPOF over ACTIVE edges only — a deprecated (corrected)
+  // route no longer carries dependency, so it must not inflate the badges.
+  const analytics = useMemo(
+    () => analyzeGraph(entities, relationships.filter(r => !r.deprecated)),
+    [entities, relationships],
+  );
   const criticalNodes = useMemo(() => topCritical(entities, analytics, 5), [entities, analytics]);
   const spofCount = useMemo(() => [...analytics.values()].filter(a => a.isSpof).length, [analytics]);
 
