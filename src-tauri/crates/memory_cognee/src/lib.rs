@@ -626,10 +626,21 @@ impl MemoryEngine for CogneeMemoryEngine {
         };
 
         // Record the Q&A in the app session so the user can rate this answer
-        // later — feedback drives cognee's improve() bridge. Non-fatal.
+        // later — feedback drives cognee's improve() bridge. The reasoning
+        // path rides along as used_graph_element_ids: feedback weights only
+        // apply to entries that name the graph elements behind the answer.
+        // Non-fatal.
+        let used_elements = if reasoning_path.is_empty() {
+            None
+        } else {
+            Some(cognee_session::UsedGraphElementIds {
+                node_ids: reasoning_path.iter().map(|e| e.id.clone()).collect(),
+                edge_ids: Vec::new(),
+            })
+        };
         let qa_id = if let Some(sm) = &self.session_manager {
             match sm
-                .save_qa(Some(APP_SESSION), None, question, &answer, None, None)
+                .save_qa(Some(APP_SESSION), None, question, &answer, None, used_elements)
                 .await
             {
                 Ok(id) => Some(id),
