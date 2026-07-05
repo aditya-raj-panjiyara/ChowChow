@@ -117,6 +117,15 @@ pub struct CorrectionResult {
     pub audit_node_id: String,
 }
 
+/// Summary of a `forget` operation — what was erased from memory.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ForgetSummary {
+    pub graph_nodes_removed: u32,
+    pub vector_points_removed: u32,
+    pub documents_removed: u32,
+    pub files_removed: u32,
+}
+
 /// A contradiction between newly ingested content and prior graph beliefs,
 /// found by the Drift Sentinel's cross-examination pass.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -179,5 +188,14 @@ pub trait MemoryEngine: Send + Sync {
     /// the default implementation — so the stub stays sentinel-silent.
     async fn detect_drift(&self, _new_content: &str) -> Result<Vec<DriftFinding>, MemoryError> {
         Ok(Vec::new())
+    }
+
+    /// Permanently erase all memory (graph, vector store, documents, files).
+    /// The "right to be forgotten": unlike node tombstones, this is a real,
+    /// unrecoverable wipe across every backend.
+    async fn forget_all(&self) -> Result<ForgetSummary, MemoryError> {
+        Err(MemoryError::Storage(
+            "forget is not supported by this memory engine".to_string(),
+        ))
     }
 }

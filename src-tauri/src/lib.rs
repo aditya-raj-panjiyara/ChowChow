@@ -189,6 +189,7 @@ pub fn run() {
             commands::blast_radius::simulate_blast_radius,
             commands::alerts::list_alerts,
             commands::alerts::resolve_alert,
+            commands::forget::forget_all_memory,
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::get_system_info,

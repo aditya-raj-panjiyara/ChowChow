@@ -351,4 +351,15 @@ impl MemoryEngine for SqliteStubEngine {
             audit_node_id: audit_id,
         })
     }
+
+    /// STUB: wipe the stub graph tables.
+    async fn forget_all(&self) -> Result<ForgetSummary, MemoryError> {
+        for table in ["stub_relationships", "stub_entities"] {
+            sqlx::query(&format!("DELETE FROM {table}"))
+                .execute(&self.pool)
+                .await
+                .map_err(|e| MemoryError::Storage(e.to_string()))?;
+        }
+        Ok(ForgetSummary::default())
+    }
 }

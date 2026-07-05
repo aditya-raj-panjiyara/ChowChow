@@ -149,6 +149,18 @@ export async function resolveAlert(alertId: string, resolution: 'resolved' | 'di
   return invoke('resolve_alert', { alertId, resolution });
 }
 
+export interface ForgetSummary {
+  graph_nodes_removed: number;
+  vector_points_removed: number;
+  documents_removed: number;
+  files_removed: number;
+}
+
+/** cognee forget() — permanently erases all memory across every backend. */
+export async function forgetAllMemory(): Promise<ForgetSummary> {
+  return invoke('forget_all_memory');
+}
+
 export async function getSettings(): Promise<AppSettings> {
   return invoke('get_settings');
 }

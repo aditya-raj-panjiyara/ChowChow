@@ -39,6 +39,9 @@ use cognee_lib::search::{SearchBuilder, SearchOrchestrator};
 
 // Re-export the verb-level API from cognee_lib::prelude
 use cognee_lib::prelude::{recall, remember, RecallResult, RememberResult};
+use cognee_lib::cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
+
+use cognee_lib::database::DeleteDb;
 
 use cognee_lib::embedding::EmbeddingEngine;
 use cognee_lib::graph::GraphDBTrait;
@@ -1235,6 +1238,55 @@ impl MemoryEngine for CogneeMemoryEngine {
             edges_deprecated,
             edges_restored,
             audit_node_id,
+        })
+    }
+
+    /// The "right to be forgotten" — maps to `cognee_lib`'s forget/delete API.
+    ///
+    /// [`DeleteService`] cascades a hard delete in dependency order across
+    /// every backend: relational DB → graph DB → vector DB → file storage,
+    /// including orphan sweeps, so no dangling references remain. Because the
+    /// graph handle is the [`live_graph::LiveGraphDb`] interceptor, node
+    /// removals stream to the Graph Explorer as they happen.
+    async fn forget_all(&self) -> Result<ForgetSummary, MemoryError> {
+        let op = trace::begin_op("Forget · erase all memory");
+        let db = self.db.clone().ok_or_else(|| {
+            MemoryError::Storage("relational database connection is required for forget".to_string())
+        })?;
+
+        trace::stage(
+            "cognee DeleteService",
+            "cascading hard delete — relational → graph → vector → file storage, with orphan sweep",
+        );
+        let mut service = DeleteService::new(self.storage.clone(), db as Arc<dyn DeleteDb>)
+            .with_graph_db(self.graph_db.clone())
+            .with_vector_db(self.vector_db.clone());
+        if let Some(store) = &self.session_store {
+            service = service.with_session_store(store.clone());
+        }
+
+        let result = service
+            .execute(&DeleteRequest {
+                scope: DeleteScope::All,
+                mode: DeleteMode::Hard,
+                memory_only: false,
+            })
+            .await
+            .map_err(|e| MemoryError::Storage(format!("forget failed: {e}")))?;
+
+        op.finish(format!(
+            "{} graph node(s) · {} vector point(s) · {} document(s) · {} file(s) forgotten",
+            result.deleted_graph_nodes,
+            result.deleted_vector_points,
+            result.deleted_data,
+            result.deleted_storage_files,
+        ));
+
+        Ok(ForgetSummary {
+            graph_nodes_removed: result.deleted_graph_nodes as u32,
+            vector_points_removed: result.deleted_vector_points as u32,
+            documents_removed: result.deleted_data as u32,
+            files_removed: result.deleted_storage_files as u32,
         })
     }
 }

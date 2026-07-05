@@ -6,6 +6,7 @@
 pub mod alerts;
 pub mod blast_radius;
 pub mod corrections;
+pub mod forget;
 pub mod graph;
 pub mod ingestion;
 pub mod query;
