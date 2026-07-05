@@ -16,18 +16,43 @@ By leveraging **cognee-rs** (the Rust implementation of Cognee) and local LLMs (
 
 ## 🧠 Cognee Integration
 
-ChowChow uses **cognee-rs** as its cognitive memory and reasoning backend. The integration includes:
+Cognee is the memory engine of ChowChow—not just a library we call, but the foundation every feature is built upon. We embedded `cognee-rs` directly in-process inside a Tauri desktop app (no server, no cloud required), wired to a local Ollama LLM and ONNX embeddings, so the entire `remember` → `recall` → `improve` → `forget` lifecycle runs completely on-device.
 
-| Cognee Primitive | How ChowChow Uses It |
-| :--- | :--- |
-| **`api::remember()`** | Extracts entities (Suppliers, Materials, Ports, Factories, Customers) and relationships from unstructured files (emails, manifests, ERP reports) to populate the Knowledge Graph. |
-| **`api::recall()`** | Performs semantic search and Graph RAG traversal to trace how materials flow through the network and answer operator questions with precise reasoning paths. |
-| **`api::improve()`** | Drives closed-loop graph refinement and correction when operators reconcile conflicting supply chain intelligence. |
+### How Cognee Primitives Map to Features
 
-### 🛠 Custom Core Integrations
-* **Live Graph Interceptor (`LiveGraphDb`):** A custom wrapper around Cognee's `GraphDBTrait` that captures node and edge additions in real time, streaming graph growth to the interactive UI.
-* **Traced LLM & Embedding (`TracedLlm` / `TracedEmbedding`):** Intercepts internal Cognee LLM prompts and embedding operations, piping them into a live **Cognition Trace** panel so operators can visualize the reasoning process step-by-step.
-* **Ontology Enforcement:** Configures and enforces a custom RDF/OWL ontology (`supplychain.org/ontology`) during extraction to ensure the Knowledge Graph adheres to strict domain boundaries (e.g. `Supplier -- supplies --> Material -- ships_via --> Port`).
+*   **`remember()` powers Ingestion:** Every document (ERP CSVs, email chains, intel reports) flows through Cognee's `add` → `cognify` → `embed` pipeline, where the local LLM extracts entities and relationships into Cognee's graph store (Ladybug) and vector store (LanceDB). We resolve Cognee's `is_a`/`EntityType` structure into semantic types to render the visual supply-chain domain graph.
+*   **`recall()` powers natural-language Querying:** Auto-routed search with graph traversal produces answers with a visible reasoning path. We layer committed corrections and manual graph edits on top as authoritative context, so answers reflect the current state of belief, not just raw historical text.
+*   **`recall()` also doubles as our Drift Sentinel:** After every ingestion, we use `recall`'s semantic retrieval to pull prior beliefs related to the new document and cross-examine them claim-by-claim, turning contradictions into alerts with ready-to-apply corrections.
+*   **`improve()` powers Answer Feedback:** Every Q&A pair is saved as a session entry carrying the reasoning-path node IDs as `used_graph_element_ids`. A thumbs-up/down triggers Cognee's four-stage improve bridge: feedback weights propagate onto the exact graph elements that produced the answer, the Q&A is persisted into the graph, and `memify` re-embeds triplets. The memory literally learns from the analyst's judgment.
+*   **`forget()` powers the Danger Zone:** Cognee's `DeleteService` cascades a hard delete across relational → graph → vector → file storage, providing a provable "right to be forgotten" with a receipt of exactly what was erased.
+
+### 🛠 Extensibility & Custom Trait Boundaries
+
+Because `cognee-rs` exposes its components as swappable traits, we extended Cognee at its boundaries to drive live observability and error-resilience:
+1.  **`LiveGraphDb`:** A decorator around `GraphDBTrait` that intercepts every graph write Cognee makes internally and broadcasts it as an IPC event—allowing users to watch the knowledge graph grow node-by-node in real time with provenance attached to every mutation.
+2.  **`TracedLlm` & `TracedEmbedding`:** Wrappers that intercept all LLM prompts and embedding operations, piping them into a live **Cognition Trace** panel.
+3.  **Schema-Repair Layer:** A resilient layer inside the LLM interceptor. When the local LLM returns almost-valid structured JSON output (e.g. missing name, wrapper keys, aliased fields), we automatically repair it against Cognee's JSON schema before deserialization, turning pipeline-fatal errors into logged auto-fixes.
+4.  **`MutedGraphDb`:** Allows us to `memify` correction statements into vector memory while suppressing graph side-effects to keep the graph topology clean.
+5.  **Human-in-the-loop Correction:** Free-text corrections are parsed into `deprecate`/`create`/`retire`/`restore` operations, applied as edge-level surgery (audit-preserved, never deleted), and memified so future retrievals honor the superseding fact.
+
+---
+
+## 🎤 60-Second Pitch & Talk Track
+
+Use this guide to walk through the architecture diagram bottom-up, following the data flow:
+
+> *"Here's how that actually works—one slide, and the data never leaves this box."*
+
+*   **Beat 1 — Sources & Queue (Bottom):** *"Everything starts as messy reality: ERP exports, email chains, PDFs. They land in a queue and get processed one by one—no batch magic, you can watch each document arrive."*
+*   **Beat 2 — The Engine (The Core/Middle):** *"Each document flows through Cognee's memory verbs—this is the heart. **Remember** extracts entities and relationships using a local LLM. **Recall** answers questions over that memory. **Improve** re-weights the memory when an analyst rates an answer or corrects a fact. **Forget** erases provably, across every store. We wrapped the engine with our own interceptors—`TracedLlm` and `LiveGraphDb`—so every internal step the AI takes is observable, and broken model output gets repaired instead of crashing the pipeline."*
+*   **Beat 3 — Storage (Left Column):** *"Underneath: a graph database, a vector store, SQLite, and the models themselves—all embedded, all on this machine. That's the sovereignty claim, physically."*
+*   **Beat 4 — Event Stream (Right Column):** *"And here's the part we're proud of: every write the engine makes broadcasts on a live event stream. That's why you'll see the graph grow node-by-node during ingestion, the trace panel narrate the AI's reasoning, and the topology strip pulse when something drifts. Nothing in this UI is polling—you're watching the memory think."*
+*   **Beat 5 — Close the Loop (Top):** *"The analyst isn't just a consumer—corrections and answer ratings flow back down and restructure the memory. It's a loop, not a pipeline."*
+
+#### 💡 Presentation & Demo Tips
+1.  **Trace one story, not just the boxes:** *"This CSV → becomes these nodes → contradicts an old belief → raises this alert → analyst fixes it → graph rewires."*
+2.  **The 15-second elevator summary:** *"Documents in at the bottom, Cognee memory in the middle, everything stored locally on the left, and a live event stream on the right that makes the UI show the memory working in real time."*
+3.  **The Hand-off:** End the architecture slide by switching to the app mid-sentence: *"...and instead of telling you about the event stream, let me show you"* → immediately drop a file on Ingestion with the Graph Explorer open to prove the diagram.
 
 ---
 
