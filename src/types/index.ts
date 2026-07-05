@@ -104,6 +104,8 @@ export interface QueryMessage {
   confidence?: ConfidenceLevel;
   reasoningPath?: ReasoningHop[];
   hopCount?: number;
+  /** Session Q&A id — enables the feedback → improve() loop */
+  qaId?: string;
 }
 
 /** Navigation tab definition */

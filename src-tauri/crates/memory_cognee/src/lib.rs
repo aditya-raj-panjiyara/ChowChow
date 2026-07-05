@@ -40,6 +40,10 @@ use cognee_lib::search::{SearchBuilder, SearchOrchestrator};
 // Re-export the verb-level API from cognee_lib::prelude
 use cognee_lib::prelude::{recall, remember, RecallResult, RememberResult};
 use cognee_lib::cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
+use cognee_lib::prelude::{improve, ImproveParams};
+
+/// Session that records every Q&A so answer feedback can drive `improve()`.
+const APP_SESSION: &str = "app-main";
 
 use cognee_lib::database::DeleteDb;
 
@@ -621,6 +625,23 @@ impl MemoryEngine for CogneeMemoryEngine {
             ConfidenceLevel::Partial
         };
 
+        // Record the Q&A in the app session so the user can rate this answer
+        // later — feedback drives cognee's improve() bridge. Non-fatal.
+        let qa_id = if let Some(sm) = &self.session_manager {
+            match sm
+                .save_qa(Some(APP_SESSION), None, question, &answer, None, None)
+                .await
+            {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    eprintln!("[query] could not record Q&A for feedback (non-fatal): {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         op.finish(format!(
             "answer ready · {} reasoning entities · confidence {confidence:?}",
             reasoning_path.len()
@@ -630,6 +651,7 @@ impl MemoryEngine for CogneeMemoryEngine {
             answer,
             reasoning_path,
             confidence,
+            qa_id,
         })
     }
 
@@ -1287,6 +1309,85 @@ impl MemoryEngine for CogneeMemoryEngine {
             vector_points_removed: result.deleted_vector_points as u32,
             documents_removed: result.deleted_data as u32,
             files_removed: result.deleted_storage_files as u32,
+        })
+    }
+
+    /// Answer feedback → cognee's `improve()` bridge.
+    ///
+    /// 1. The thumbs-up/down (mapped to a 1–5 score) is attached to the Q&A
+    ///    entry recorded by `query()`.
+    /// 2. `improve()` runs its four-stage pipeline: feedback weights are
+    ///    propagated onto the graph nodes/edges that produced the answer,
+    ///    session Q&A is persisted into the permanent graph, memify re-embeds
+    ///    triplets, and recent graph edges sync back into the session context.
+    ///
+    /// Net effect: retrieval genuinely learns — down-voted evidence ranks
+    /// lower on the next recall, up-voted evidence ranks higher.
+    async fn improve_answer(
+        &self,
+        qa_id: &str,
+        helpful: bool,
+        note: Option<String>,
+    ) -> Result<ImproveSummary, MemoryError> {
+        let sm = self.session_manager.clone().ok_or_else(|| {
+            MemoryError::Storage("session support is required for answer feedback".to_string())
+        })?;
+
+        let op = trace::begin_op(format!(
+            "Improve · answer rated {}",
+            if helpful { "helpful" } else { "not helpful" }
+        ));
+
+        let score = if helpful { 5 } else { 1 };
+        sm.add_feedback(Some(APP_SESSION), None, qa_id, note.as_deref(), Some(score))
+            .await
+            .map_err(|e| MemoryError::Storage(format!("feedback recording failed: {e}")))?;
+        trace::stage(
+            "session feedback",
+            format!("score {score}/5 attached to Q&A entry {qa_id}"),
+        );
+
+        trace::stage(
+            "improve() pipeline",
+            "apply feedback weights to graph → persist Q&A → memify re-embed → sync session context",
+        );
+        let result = improve(ImproveParams {
+            dataset_name: self.dataset_name.clone(),
+            session_ids: Some(vec![APP_SESSION.to_string()]),
+            node_name: None,
+            owner_id: self.owner_id,
+            tenant_id: None,
+            feedback_alpha: 0.3,
+            extraction_tasks: None,
+            enrichment_tasks: None,
+            data: None,
+            build_global_context_index: false,
+            run_in_background: false,
+            llm: self.llm.clone(),
+            storage: self.storage.clone(),
+            graph_db: self.graph_db.clone(),
+            vector_db: self.vector_db.clone(),
+            embedding_engine: self.embedding_engine.clone(),
+            ontology_resolver: self.ontology_resolver.clone(),
+            db: self.db.clone(),
+            session_store: self.session_store.clone(),
+            session_manager: self.session_manager.clone(),
+            add_pipeline: Some(self.add_pipeline.as_ref()),
+            checkpoint_store: self.checkpoint_store.clone(),
+            cognify_config: &self.cognify_config,
+        })
+        .await
+        .map_err(|e| MemoryError::Storage(format!("improve failed: {e}")))?;
+
+        op.finish(format!(
+            "{} feedback update(s) applied to graph weights · {} session(s) persisted · {} edge(s) synced",
+            result.feedback_entries_applied, result.sessions_persisted, result.edges_synced,
+        ));
+
+        Ok(ImproveSummary {
+            feedback_applied: result.feedback_entries_applied as u32,
+            sessions_persisted: result.sessions_persisted as u32,
+            edges_synced: result.edges_synced as u32,
         })
     }
 }

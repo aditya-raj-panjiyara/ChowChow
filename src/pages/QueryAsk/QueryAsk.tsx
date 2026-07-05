@@ -145,6 +145,7 @@ export default function QueryAsk() {
         role: 'ai',
         content: result.answer,
         confidence: confidenceMap[result.confidence] ?? 'low',
+        qaId: result.qa_id ?? undefined,
         hopCount: result.reasoning_path.length,
         reasoningPath: result.reasoning_path.map(e => ({
           entityId: e.id,

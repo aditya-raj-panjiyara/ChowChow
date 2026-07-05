@@ -4,9 +4,26 @@
 
 use crate::state::AppState;
 use domain::query_service::QueryService;
-use memory_engine::QueryResult;
+use memory_engine::{ImproveSummary, QueryResult};
 use std::collections::HashMap;
 use tauri::State;
+
+/// Rate an answer (thumbs up/down + optional note). Feeds cognee's
+/// `improve()` bridge: the graph elements behind the answer are re-weighted,
+/// so retrieval learns from the analyst's judgment.
+#[tauri::command]
+pub async fn improve_answer(
+    qa_id: String,
+    helpful: bool,
+    note: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<ImproveSummary, String> {
+    state
+        .memory()
+        .improve_answer(&qa_id, helpful, note)
+        .await
+        .map_err(|e| e.to_string())
+}
 
 /// Ask a natural-language question. Returns answer + reasoning path + confidence.
 ///

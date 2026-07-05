@@ -40,6 +40,10 @@ pub struct QueryResult {
     /// The chain of entities traversed to arrive at the answer.
     pub reasoning_path: Vec<MemoryEntity>,
     pub confidence: ConfidenceLevel,
+    /// Session Q&A entry id — feedback on this answer (`improve_answer`)
+    /// attaches here. `None` when the engine has no session support.
+    #[serde(default)]
+    pub qa_id: Option<String>,
 }
 
 /// How much trust the engine has in a query result.
@@ -115,6 +119,17 @@ pub struct CorrectionResult {
     pub edges_restored: u32,
     /// The audit node ID in the graph for traceability.
     pub audit_node_id: String,
+}
+
+/// Summary of an `improve` operation — how answer feedback reshaped memory.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ImproveSummary {
+    /// Feedback entries whose graph weight updates applied cleanly.
+    pub feedback_applied: u32,
+    /// Sessions whose Q&A text was persisted into the knowledge graph.
+    pub sessions_persisted: u32,
+    /// Graph edges newly synced into the session context.
+    pub edges_synced: u32,
 }
 
 /// Summary of a `forget` operation — what was erased from memory.
@@ -196,6 +211,20 @@ pub trait MemoryEngine: Send + Sync {
     async fn forget_all(&self) -> Result<ForgetSummary, MemoryError> {
         Err(MemoryError::Storage(
             "forget is not supported by this memory engine".to_string(),
+        ))
+    }
+
+    /// Apply user feedback on an answer (`qa_id` from [`QueryResult`]) and
+    /// run cognee's `improve()` bridge: feedback re-weights the graph
+    /// elements that produced the answer, so future retrieval learns from it.
+    async fn improve_answer(
+        &self,
+        _qa_id: &str,
+        _helpful: bool,
+        _note: Option<String>,
+    ) -> Result<ImproveSummary, MemoryError> {
+        Err(MemoryError::Storage(
+            "answer feedback is not supported by this memory engine".to_string(),
         ))
     }
 }

@@ -209,6 +209,7 @@ impl MemoryEngine for SqliteStubEngine {
                 answer: "No meaningful keywords found in question.".to_string(),
                 reasoning_path: vec![],
                 confidence: ConfidenceLevel::Low,
+                qa_id: None,
             });
         }
 
@@ -262,6 +263,7 @@ impl MemoryEngine for SqliteStubEngine {
             answer,
             reasoning_path: matching_entities,
             confidence,
+            qa_id: None,
         })
     }
 

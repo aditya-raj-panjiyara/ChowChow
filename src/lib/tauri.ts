@@ -23,6 +23,19 @@ export interface BackendQueryResult {
   answer: string;
   reasoning_path: MemoryEntity[];
   confidence: 'High' | 'Partial' | 'Low';
+  /** Session Q&A id — rate this answer via improveAnswer(). */
+  qa_id: string | null;
+}
+
+export interface ImproveSummary {
+  feedback_applied: number;
+  sessions_persisted: number;
+  edges_synced: number;
+}
+
+/** Rate an answer — cognee improve() re-weights the graph behind it. */
+export async function improveAnswer(qaId: string, helpful: boolean, note?: string): Promise<ImproveSummary> {
+  return invoke('improve_answer', { qaId, helpful, note: note ?? null });
 }
 
 export interface GraphSnapshot {

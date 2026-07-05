@@ -176,6 +176,7 @@ pub fn run() {
             commands::ingestion::ingest_file,
             commands::ingestion::get_ingestion_status,
             commands::query::ask_question,
+            commands::query::improve_answer,
             commands::graph::get_graph_snapshot,
             commands::graph::add_custom_node,
             commands::graph::delete_custom_node,
