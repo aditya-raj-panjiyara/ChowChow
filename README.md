@@ -35,26 +35,6 @@ Because `cognee-rs` exposes its components as swappable traits, we extended Cogn
 4.  **`MutedGraphDb`:** Allows us to `memify` correction statements into vector memory while suppressing graph side-effects to keep the graph topology clean.
 5.  **Human-in-the-loop Correction:** Free-text corrections are parsed into `deprecate`/`create`/`retire`/`restore` operations, applied as edge-level surgery (audit-preserved, never deleted), and memified so future retrievals honor the superseding fact.
 
----
-
-## 🎤 60-Second Pitch & Talk Track
-
-Use this guide to walk through the architecture diagram bottom-up, following the data flow:
-
-> *"Here's how that actually works—one slide, and the data never leaves this box."*
-
-*   **Beat 1 — Sources & Queue (Bottom):** *"Everything starts as messy reality: ERP exports, email chains, PDFs. They land in a queue and get processed one by one—no batch magic, you can watch each document arrive."*
-*   **Beat 2 — The Engine (The Core/Middle):** *"Each document flows through Cognee's memory verbs—this is the heart. **Remember** extracts entities and relationships using a local LLM. **Recall** answers questions over that memory. **Improve** re-weights the memory when an analyst rates an answer or corrects a fact. **Forget** erases provably, across every store. We wrapped the engine with our own interceptors—`TracedLlm` and `LiveGraphDb`—so every internal step the AI takes is observable, and broken model output gets repaired instead of crashing the pipeline."*
-*   **Beat 3 — Storage (Left Column):** *"Underneath: a graph database, a vector store, SQLite, and the models themselves—all embedded, all on this machine. That's the sovereignty claim, physically."*
-*   **Beat 4 — Event Stream (Right Column):** *"And here's the part we're proud of: every write the engine makes broadcasts on a live event stream. That's why you'll see the graph grow node-by-node during ingestion, the trace panel narrate the AI's reasoning, and the topology strip pulse when something drifts. Nothing in this UI is polling—you're watching the memory think."*
-*   **Beat 5 — Close the Loop (Top):** *"The analyst isn't just a consumer—corrections and answer ratings flow back down and restructure the memory. It's a loop, not a pipeline."*
-
-#### 💡 Presentation & Demo Tips
-1.  **Trace one story, not just the boxes:** *"This CSV → becomes these nodes → contradicts an old belief → raises this alert → analyst fixes it → graph rewires."*
-2.  **The 15-second elevator summary:** *"Documents in at the bottom, Cognee memory in the middle, everything stored locally on the left, and a live event stream on the right that makes the UI show the memory working in real time."*
-3.  **The Hand-off:** End the architecture slide by switching to the app mid-sentence: *"...and instead of telling you about the event stream, let me show you"* → immediately drop a file on Ingestion with the Graph Explorer open to prove the diagram.
-
----
 
 ## ✨ Key Features
 
