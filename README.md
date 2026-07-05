@@ -58,22 +58,7 @@ Resolve drift alerts in one click. ChowChow uses LLM intent extraction to transl
 
 ## 📐 Architecture
 
-```mermaid
-graph TD
-    UI[React Frontend] <-->|IPC Commands & Events| Tauri[Tauri Rust Core]
-    Tauri <--> MemoryEngine[Memory Engine Trait]
-    MemoryEngine <--> Cognee[crates/memory_cognee]
-    Cognee <--> CogneeRS[cognee-rs lib]
-    
-    %% Local Sovereignty Stack
-    CogneeRS <--> SQLite[(Local SQLite Database)]
-    CogneeRS <--> LanceDB[(Local Vector DB)]
-    CogneeRS <--> Ollama[Ollama Local LLM / Embeddings]
-    
-    %% Real-time feedback
-    Cognee -.->|Stream graph delta| UI
-    Cognee -.->|Stream pipeline traces| UI
-```
+<img width="968" height="803" alt="image" src="https://github.com/user-attachments/assets/29175bfd-cc4e-42ef-b13f-43d8b3ef0002" />
 
 ---
 
