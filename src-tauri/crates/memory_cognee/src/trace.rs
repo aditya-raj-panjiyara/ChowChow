@@ -256,6 +256,28 @@ impl Llm for TracedLlm {
             }
         };
 
+        // Schema repair — local models often return JSON that is almost
+        // right (label instead of name, wrapper keys, numbers as strings).
+        // cognee deserializes strictly, so a single missing required field
+        // ("missing field `name`") would fail the whole cognify pipeline.
+        // Fix what we can against the supplied schema before cognee sees it.
+        let result = result.map(|v| {
+            let (repaired, fixes) = crate::schema_repair::repair(v, json_schema);
+            if !fixes.is_empty() {
+                emit(
+                    "llm",
+                    format!("schema repair · {schema_name}"),
+                    format!(
+                        "model output violated the schema — {} auto-fix(es): {}",
+                        fixes.len(),
+                        preview(&fixes.join(" · "), 240)
+                    ),
+                    None,
+                );
+            }
+            repaired
+        });
+
         let ms = started.elapsed().as_millis() as u64;
         match &result {
             Ok(v) => emit(

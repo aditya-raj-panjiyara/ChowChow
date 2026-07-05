@@ -18,6 +18,7 @@
 
 pub mod config;
 pub mod live_graph;
+pub mod schema_repair;
 pub mod trace;
 
 use std::borrow::Cow;

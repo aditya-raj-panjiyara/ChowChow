@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import GraphCanvas, { type BlastOverlayData } from './GraphCanvas';
-import { useLiveGraph, type ApplyResult, type GraphDelta } from './useLiveGraph';
+import { useLiveGraph, type ApplyResult, type ChangeRecord, type GraphDelta } from './useLiveGraph';
 import InspectorPanel from './InspectorPanel';
 import GraphSearch from './GraphSearch';
 import GraphFilters from './GraphFilters';
@@ -214,7 +214,7 @@ export default function GraphExplorer() {
         connectionCount: 0,
       }]);
       markFresh('node', d.id);
-      return { applied: 'node', label: d.name, detail: d.entity_type ?? 'Entity' };
+      return { applied: 'node', label: d.name, detail: d.entity_type ?? 'Entity', nodeId: d.id };
     }
 
     if (d.kind === 'edge_added' && d.from_id && d.to_id && d.rel_type) {
@@ -255,6 +255,8 @@ export default function GraphExplorer() {
         applied: 'edge',
         label: `${nameOf(sourceId)} → ${nameOf(targetId)}`,
         detail: d.rel_type,
+        fromId: sourceId,
+        toId: targetId,
       };
     }
 
@@ -268,12 +270,24 @@ export default function GraphExplorer() {
       if (sourceNode) sourceId = sourceNode.id;
       if (targetNode) targetId = targetNode.id;
 
+      const match = relationshipsRef.current.find(r =>
+        r.sourceId === sourceId && r.targetId === targetId
+        && (!d.rel_type || r.label === d.rel_type) && !r.deprecated,
+      );
       setRelationships(prev => prev.map(r =>
         r.sourceId === sourceId && r.targetId === targetId && (!d.rel_type || r.label === d.rel_type)
           ? { ...r, deprecated: true }
           : r,
       ));
-      return { applied: 'other' };
+      if (!match) return { applied: 'other' };
+      const nameOf = (id: string) => entitiesRef.current.find(e => e.id === id)?.name ?? id;
+      return {
+        applied: 'deprecated',
+        label: `${nameOf(sourceId)} → ${nameOf(targetId)}`,
+        detail: d.rel_type ?? match.label,
+        fromId: sourceId,
+        toId: targetId,
+      };
     }
 
     if (d.kind === 'node_removed' && d.id) {
@@ -374,6 +388,46 @@ export default function GraphExplorer() {
     setBlastResult(null);
     setRevealedHops(0);
   }, []);
+
+  // ── Live change → canvas interactions ──────────────────────
+  const [expandedChange, setExpandedChange] = useState<number | null>(null);
+
+  // Center the canvas on the changed node and re-flash its spawn halo.
+  // Deliberately does NOT open the inspector — the changes dialog stays up.
+  const spotlightChange = useCallback((c: ChangeRecord) => {
+    const targetId = c.kind === 'node' ? c.nodeId : c.fromId;
+    if (!targetId || !entitiesRef.current.some(e => e.id === targetId)) {
+      showToast('err', 'This node is no longer on the graph');
+      return;
+    }
+    setFocusNodeId(targetId);
+    setFocusNonce(v => v + 1);
+    markFresh('node', targetId);
+    if (c.kind !== 'node' && c.toId) markFresh('node', c.toId);
+    if (c.kind === 'edge') markFresh('edge', `live-${c.seq}`);
+  }, [markFresh, showToast]);
+
+  // Relationship succession — pair a deprecated edge with the replacement
+  // edge from the same correction burst (they share an endpoint), so a
+  // change can be read as "PAST relation → relation that superseded it".
+  const findSuccession = useCallback((c: ChangeRecord): { past: ChangeRecord | null; next: ChangeRecord | null } => {
+    const shares = (a: ChangeRecord, b: ChangeRecord) =>
+      !!((a.fromId && (a.fromId === b.fromId || a.fromId === b.toId)) ||
+         (a.toId && (a.toId === b.fromId || a.toId === b.toId)));
+    if (c.kind === 'deprecated') {
+      const next = liveChanges
+        .filter(r => r.kind === 'edge' && r.seq > c.seq && shares(c, r))
+        .sort((x, y) => x.seq - y.seq)[0] ?? null;
+      return { past: c, next };
+    }
+    if (c.kind === 'edge') {
+      const past = liveChanges
+        .filter(r => r.kind === 'deprecated' && r.seq < c.seq && shares(c, r))
+        .sort((x, y) => y.seq - x.seq)[0] ?? null;
+      return { past, next: c };
+    }
+    return { past: null, next: null };
+  }, [liveChanges]);
 
   useEffect(() => () => {
     if (revealTimer.current) clearInterval(revealTimer.current);
@@ -626,6 +680,9 @@ export default function GraphExplorer() {
           }}>
             <span><span className="text-mono-sm" style={{ color: 'var(--signal-green)', fontWeight: 700 }}>{liveCounts.nodes}</span> entities</span>
             <span><span className="text-mono-sm" style={{ color: 'var(--accent-cool)', fontWeight: 700 }}>{liveCounts.edges}</span> relationships</span>
+            {liveCounts.deprecated > 0 && (
+              <span><span className="text-mono-sm" style={{ color: 'var(--signal-amber)', fontWeight: 700 }}>{liveCounts.deprecated}</span> rewired</span>
+            )}
             <span style={{ flex: 1 }} />
             <span>{liveActive ? 'streaming…' : 'complete'}</span>
           </div>
@@ -639,51 +696,136 @@ export default function GraphExplorer() {
                 and the reason it was created.
               </div>
             ) : (
-              liveChanges.map(c => (
-                <div
-                  key={c.seq}
-                  style={{
-                    padding: '9px 14px', borderBottom: '1px solid var(--border-hairline)',
-                    borderLeft: `2px solid ${c.kind === 'node' ? 'var(--signal-green)' : 'var(--accent-cool)'}`,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
-                    <span className="text-mono-sm" style={{
-                      fontSize: 8.5, fontWeight: 700, letterSpacing: '0.08em', flexShrink: 0,
-                      color: c.kind === 'node' ? 'var(--signal-green)' : 'var(--accent-cool)',
-                    }}>
-                      {c.kind === 'node' ? '＋ ENTITY' : '＋ LINK'}
-                    </span>
-                    <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {c.label}
-                    </span>
-                    <span className="text-mono-sm" style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>
-                      {c.detail}
-                    </span>
-                  </div>
-                  {c.source && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cool)" strokeWidth="2" style={{ flexShrink: 0 }}>
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                        <polyline points="14 2 14 8 20 8" />
-                      </svg>
-                      <span className="text-mono-sm" style={{ fontSize: 10, color: 'var(--accent-cool)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {c.source}
+              liveChanges.map(c => {
+                const expanded = expandedChange === c.seq;
+                const nameOf = (id: string | null) =>
+                  id ? (entities.find(e => e.id === id)?.name ?? '(removed)') : '?';
+                return (
+                  <div
+                    key={c.seq}
+                    onClick={() => {
+                      setExpandedChange(prev => (prev === c.seq ? null : c.seq));
+                      spotlightChange(c);
+                    }}
+                    style={{
+                      padding: '9px 14px', borderBottom: '1px solid var(--border-hairline)',
+                      borderLeft: `2px solid ${c.kind === 'node' ? 'var(--signal-green)' : c.kind === 'deprecated' ? 'var(--signal-amber)' : 'var(--accent-cool)'}`,
+                      cursor: 'pointer',
+                      background: expanded ? 'var(--bg-raised)' : 'transparent',
+                      transition: 'background 0.15s ease',
+                    }}
+                    onMouseEnter={e => { if (!expanded) e.currentTarget.style.background = 'var(--bg-raised)'; }}
+                    onMouseLeave={e => { if (!expanded) e.currentTarget.style.background = 'transparent'; }}
+                    title="Click to locate on the graph"
+                  >
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
+                      <span className="text-mono-sm" style={{
+                        fontSize: 8.5, fontWeight: 700, letterSpacing: '0.08em', flexShrink: 0,
+                        color: c.kind === 'node' ? 'var(--signal-green)' : c.kind === 'deprecated' ? 'var(--signal-amber)' : 'var(--accent-cool)',
+                      }}>
+                        {c.kind === 'node' ? '＋ ENTITY' : c.kind === 'deprecated' ? '− DEPRECATED' : '＋ LINK'}
                       </span>
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {c.label}
+                      </span>
+                      <span className="text-mono-sm" style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>
+                        {c.detail}
+                      </span>
+                      <span style={{ fontSize: 9, color: 'var(--text-muted)', flexShrink: 0 }}>{expanded ? '▾' : '▸'}</span>
                     </div>
-                  )}
-                  {c.reason && (
-                    <div style={{ fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.5, paddingLeft: 15 }}>
-                      {c.reason}
-                    </div>
-                  )}
-                </div>
-              ))
+                    {c.source && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cool)" strokeWidth="2" style={{ flexShrink: 0 }}>
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                          <polyline points="14 2 14 8 20 8" />
+                        </svg>
+                        <span className="text-mono-sm" style={{ fontSize: 10, color: 'var(--accent-cool)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {c.source}
+                        </span>
+                      </div>
+                    )}
+                    {c.reason && (
+                      <div style={{ fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.5, paddingLeft: 15 }}>
+                        {c.reason}
+                      </div>
+                    )}
+                    {expanded && (() => {
+                      const { past, next } = findSuccession(c);
+                      return (
+                        <div style={{ marginTop: 8, paddingLeft: 15, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          {c.kind === 'node' ? (
+                            <div style={{ fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                              Changed node: <strong style={{ color: 'var(--text-primary)' }}>{nameOf(c.nodeId)}</strong>
+                              {c.source && <> · extracted from <span style={{ color: 'var(--accent-cool)' }}>{c.source}</span></>}
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 10.5, lineHeight: 1.6 }}>
+                              {/* Past relation — what this change deprecated / what preceded it */}
+                              {past ? (
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                                  <span className="text-mono-sm" style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--signal-amber)', flexShrink: 0 }}>
+                                    PAST
+                                  </span>
+                                  <span style={{ color: 'var(--signal-amber)', textDecoration: past.seq === c.seq ? undefined : 'line-through', opacity: 0.9 }}>
+                                    {nameOf(past.fromId)} —{past.detail}→ {nameOf(past.toId)}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div style={{ color: 'var(--text-muted)' }}>
+                                  No earlier relation was replaced — this is a brand-new link.
+                                </div>
+                              )}
+                              {/* Successor relation — what holds now */}
+                              {next ? (
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                                  <span className="text-mono-sm" style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--signal-green)', flexShrink: 0 }}>
+                                    NOW
+                                  </span>
+                                  <span style={{ color: 'var(--text-primary)' }}>
+                                    {nameOf(next.fromId)} <span className="text-mono-sm" style={{ color: 'var(--signal-green)' }}>—{next.detail}→</span> {nameOf(next.toId)}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div style={{ color: 'var(--text-muted)' }}>
+                                  No successor recorded — the relation was retired without a replacement.
+                                </div>
+                              )}
+                              {c.source && (
+                                <div style={{ color: 'var(--text-muted)' }}>
+                                  Source: <span style={{ color: 'var(--accent-cool)' }}>{c.source}</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button
+                              className="btn btn--ghost"
+                              style={{ fontSize: 10.5, padding: '4px 10px' }}
+                              onClick={e => { e.stopPropagation(); spotlightChange(c); }}
+                            >
+                              ⌖ Locate on graph
+                            </button>
+                            {c.kind === 'deprecated' && next && (
+                              <button
+                                className="btn btn--ghost"
+                                style={{ fontSize: 10.5, padding: '4px 10px', color: 'var(--signal-green)' }}
+                                onClick={e => { e.stopPropagation(); spotlightChange(next); }}
+                              >
+                                ⌖ Locate successor
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })
             )}
           </div>
 
           <div style={{ padding: '7px 14px', borderTop: '1px solid var(--border-hairline)', fontSize: 10, color: 'var(--text-muted)' }}>
-            Every row is a real write cognee made to the knowledge graph.
+            Click a change to locate it on the graph · rewired links show past → successor.
           </div>
         </div>
       )}

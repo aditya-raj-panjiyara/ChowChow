@@ -339,6 +339,8 @@ pub fn start_proxy_server(app_handle: AppHandle) {
                     }
                 };
 
+                let is_json_requested = body_str.contains("response_format") || body_str.contains("functions") || body_str.contains("json_schema");
+
                 // Read api key from settings.json
                 let settings = load_settings_internal(&app_handle);
                 let api_key = settings.llm.api_key;
@@ -377,6 +379,13 @@ pub fn start_proxy_server(app_handle: AppHandle) {
                             "content": content_text
                         }));
                     }
+                }
+
+                if is_json_requested {
+                    if !system_prompt.is_empty() {
+                        system_prompt.push_str("\n\n");
+                    }
+                    system_prompt.push_str("CRITICAL: You MUST output ONLY a single, valid JSON object matching the requested schema. Do NOT wrap the JSON in markdown formatting, backticks, or code blocks (e.g., do NOT use ```json or ```). Do not include any conversational text, explanations, or preambles.");
                 }
 
                 // Anthropic API fails if we send an assistant message first, or if we send consecutive messages with the same role.
@@ -460,11 +469,26 @@ pub fn start_proxy_server(app_handle: AppHandle) {
                         }
 
                         if let Ok(anthropic_val) = serde_json::from_str::<AnthropicResponse>(&resp_body) {
-                            let text_content = anthropic_val.content.iter()
+                            let mut text_content = anthropic_val.content.iter()
                                 .filter(|c| c.block_type == "text")
                                 .filter_map(|c| c.text.clone())
                                 .collect::<Vec<_>>()
                                 .join("\n");
+
+                            if is_json_requested {
+                                let mut cleaned = text_content.trim();
+                                if cleaned.starts_with("```") {
+                                    if let Some(first_newline) = cleaned.find('\n') {
+                                        cleaned = &cleaned[first_newline + 1..];
+                                    } else {
+                                        cleaned = cleaned.trim_start_matches('`').trim_start_matches("json").trim_start_matches("JSON");
+                                    }
+                                }
+                                if cleaned.ends_with("```") {
+                                    cleaned = &cleaned[..cleaned.len() - 3];
+                                }
+                                text_content = cleaned.trim().to_string();
+                            }
 
                             let openai_val = serde_json::json!({
                                 "id": anthropic_val.id,

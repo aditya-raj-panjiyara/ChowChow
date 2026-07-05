@@ -23,7 +23,7 @@ export interface GraphDelta {
 }
 
 /** What applying a delta did — drives the LIVE badge counters. */
-export type DeltaApplied = 'node' | 'edge' | 'other' | null;
+export type DeltaApplied = 'node' | 'edge' | 'deprecated' | 'other' | null;
 
 /** A committed change surfaced in the Live Changes dialog. */
 export interface ChangeRecord {
@@ -35,6 +35,11 @@ export interface ChangeRecord {
   detail: string;
   source: string | null;
   reason: string | null;
+  /** Canvas id of the created node — click-to-locate / simulate. */
+  nodeId: string | null;
+  /** Resolved edge endpoints on the canvas (edge changes). */
+  fromId: string | null;
+  toId: string | null;
   ts_ms: number;
 }
 
@@ -49,6 +54,12 @@ export interface ApplyResult {
   /** Node name, or "from → to" for an edge — resolved by the caller. */
   label?: string;
   detail?: string;
+  /** Canvas id of the created node (node changes). */
+  nodeId?: string;
+  /** Resolved edge endpoint ids (edge changes) — may differ from the raw
+   *  delta ids when the caller deduplicated by entity name. */
+  fromId?: string;
+  toId?: string;
 }
 
 /**
@@ -62,7 +73,7 @@ export interface ApplyResult {
  */
 export function useLiveGraph(applyDelta: (delta: GraphDelta) => ApplyResult) {
   const [live, setLive] = useState(false);
-  const [counts, setCounts] = useState({ nodes: 0, edges: 0 });
+  const [counts, setCounts] = useState({ nodes: 0, edges: 0, deprecated: 0 });
   const [changes, setChanges] = useState<ChangeRecord[]>([]);
 
   const queueRef = useRef<GraphDelta[]>([]);
@@ -90,7 +101,7 @@ export function useLiveGraph(applyDelta: (delta: GraphDelta) => ApplyResult) {
           // Keep the badge up briefly so short bursts don't flicker.
           idleRef.current = setTimeout(() => {
             setLive(false);
-            setCounts({ nodes: 0, edges: 0 });
+            setCounts({ nodes: 0, edges: 0, deprecated: 0 });
             // Keep `changes` — the dialog remains reviewable after ingestion.
           }, IDLE_LINGER_MS);
           return;
@@ -99,7 +110,8 @@ export function useLiveGraph(applyDelta: (delta: GraphDelta) => ApplyResult) {
         const { applied } = result;
         if (applied === 'node') setCounts(c => ({ ...c, nodes: c.nodes + 1 }));
         if (applied === 'edge') setCounts(c => ({ ...c, edges: c.edges + 1 }));
-        if (applied === 'node' || applied === 'edge') {
+        if (applied === 'deprecated') setCounts(c => ({ ...c, deprecated: c.deprecated + 1 }));
+        if (applied === 'node' || applied === 'edge' || applied === 'deprecated') {
           const record: ChangeRecord = {
             seq: delta.seq,
             kind: applied,
@@ -107,6 +119,9 @@ export function useLiveGraph(applyDelta: (delta: GraphDelta) => ApplyResult) {
             detail: result.detail ?? delta.entity_type ?? delta.rel_type ?? '',
             source: delta.source,
             reason: delta.reason,
+            nodeId: result.nodeId ?? delta.id,
+            fromId: result.fromId ?? delta.from_id,
+            toId: result.toId ?? delta.to_id,
             ts_ms: delta.ts_ms,
           };
           setChanges(prev => [record, ...prev].slice(0, MAX_CHANGE_LOG));
