@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri",
+    "tauri": "MACOSX_DEPLOYMENT_TARGET=11.0 tauri",
     "reset:memory": "./reset_memory.sh"
   },
   "dependencies": {
