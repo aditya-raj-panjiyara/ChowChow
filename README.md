@@ -1,78 +1,77 @@
-# 🐶 ChowChow
+# ChowChow
 
 > **The Sovereign Supply Chain Risk Engine**
 > 
-> *A desktop-native application designed to map, analyze, and protect complex supply chains in a completely local, private environment. Built for the **Cognee** hackathon.*
+> A desktop-native application designed to map, analyze, and protect complex supply chains in a completely local, private environment. Built for the **Cognee** hackathon.
 
 ---
 
-## 💡 Overview
+## What is ChowChow?
 
-Modern supply chains are highly fragile, opaque, and constantly shifting. A delay at a single port or a failure at a tier-2 supplier can cascade into a catastrophic disruption. **ChowChow** solves this by constructing a local, semantic Knowledge Graph of your supply chain network, automatically identifying single points of failure (SPOFs), and mapping risk propagation.
+Modern supply chains are fragile and opaque. A bottleneck at a single port or a sudden insolvency at a tier-2 supplier can trigger a massive cascade of disruptions downstream. ChowChow solves this by constructing a local, semantic Knowledge Graph of your supply chain network. It automatically identifies single points of failure (SPOFs), maps how risks propagate, and simulates real-world crises.
 
-By leveraging **cognee-rs** (the Rust implementation of Cognee) and local LLMs (via Ollama), ChowChow runs entirely on the operator's machine. None of your sensitive supply chain data, vendor emails, or shipment logs ever leave your local environment.
+Because it's built using **cognee-rs** (the native Rust implementation of Cognee) and local LLMs via Ollama, ChowChow runs entirely on your own machine. Your sensitive vendor emails, proprietary ERP data, and shipment logs never leave your local environment.
 
 ---
 
-## 🧠 Cognee Integration
+## Cognee Integration
 
-Cognee is the memory engine of ChowChow—not just a library we call, but the foundation every feature is built upon. We embedded `cognee-rs` directly in-process inside a Tauri desktop app (no server, no cloud required), wired to a local Ollama LLM and ONNX embeddings, so the entire `remember` → `recall` → `improve` → `forget` lifecycle runs completely on-device.
+Cognee isn't just a third-party API we call—it's the core engine of the entire application. We embedded `cognee-rs` directly in-process inside a Tauri desktop app, connecting it to a local Ollama instance and ONNX embeddings. The entire memory lifecycle runs completely on-device.
 
-### How Cognee Primitives Map to Features
+### Mapping Cognee Primitives to Features
 
-*   **`remember()` powers Ingestion:** Every document (ERP CSVs, email chains, intel reports) flows through Cognee's `add` → `cognify` → `embed` pipeline, where the local LLM extracts entities and relationships into Cognee's graph store (Ladybug) and vector store (LanceDB). We resolve Cognee's `is_a`/`EntityType` structure into semantic types to render the visual supply-chain domain graph.
-*   **`recall()` powers natural-language Querying:** Auto-routed search with graph traversal produces answers with a visible reasoning path. We layer committed corrections and manual graph edits on top as authoritative context, so answers reflect the current state of belief, not just raw historical text.
-*   **`recall()` also doubles as our Drift Sentinel:** After every ingestion, we use `recall`'s semantic retrieval to pull prior beliefs related to the new document and cross-examine them claim-by-claim, turning contradictions into alerts with ready-to-apply corrections.
-*   **`improve()` powers Answer Feedback:** Every Q&A pair is saved as a session entry carrying the reasoning-path node IDs as `used_graph_element_ids`. A thumbs-up/down triggers Cognee's four-stage improve bridge: feedback weights propagate onto the exact graph elements that produced the answer, the Q&A is persisted into the graph, and `memify` re-embeds triplets. The memory literally learns from the analyst's judgment.
-*   **`forget()` powers the Danger Zone:** Cognee's `DeleteService` cascades a hard delete across relational → graph → vector → file storage, providing a provable "right to be forgotten" with a receipt of exactly what was erased.
+* **`remember()` powers Ingestion:** Raw files (ERP CSVs, email chains, intelligence reports) flow through Cognee’s `add` → `cognify` → `embed` pipeline. The local LLM extracts entities and relationships into Cognee’s graph store (Ladybug) and vector store (LanceDB). We resolve Cognee's internal `is_a` structures to render our visual domain graph.
+* **`recall()` powers natural-language Querying:** Search queries are auto-routed through graph traversals to provide answers alongside a clear, visible reasoning path. We layer manual edits and committed corrections on top as authoritative context, ensuring retrievals reflect current ground truth rather than outdated historical text.
+* **`recall()` as our Drift Sentinel:** Every time a new document is ingested, the application uses semantic retrieval to pull prior graph states and cross-examines the incoming data claim-by-claim. Any contradictions are instantly flagged as drift alerts.
+* **`improve()` powers Answer Feedback:** Every Q&A pair is saved alongside the exact graph node IDs used to generate it. Giving an answer a thumbs-up or thumbs-down triggers Cognee’s four-stage improvement bridge, propagating weight adjustments back to the exact graph elements responsible for the response.
+* **`forget()` powers the Danger Zone:** When you need data wiped, Cognee’s `DeleteService` executes a hard, cascading delete across relational, graph, vector, and file storage, completely clearing the footprint.
 
-### 🛠 Extensibility & Custom Trait Boundaries
+### Extensibility & Custom Trait Boundaries
 
-Because `cognee-rs` exposes its components as swappable traits, we extended Cognee at its boundaries to drive live observability and error-resilience:
-1.  **`LiveGraphDb`:** A decorator around `GraphDBTrait` that intercepts every graph write Cognee makes internally and broadcasts it as an IPC event—allowing users to watch the knowledge graph grow node-by-node in real time with provenance attached to every mutation.
-2.  **`TracedLlm` & `TracedEmbedding`:** Wrappers that intercept all LLM prompts and embedding operations, piping them into a live **Cognition Trace** panel.
-3.  **Schema-Repair Layer:** A resilient layer inside the LLM interceptor. When the local LLM returns almost-valid structured JSON output (e.g. missing name, wrapper keys, aliased fields), we automatically repair it against Cognee's JSON schema before deserialization, turning pipeline-fatal errors into logged auto-fixes.
-4.  **`MutedGraphDb`:** Allows us to `memify` correction statements into vector memory while suppressing graph side-effects to keep the graph topology clean.
-5.  **Human-in-the-loop Correction:** Free-text corrections are parsed into `deprecate`/`create`/`retire`/`restore` operations, applied as edge-level surgery (audit-preserved, never deleted), and memified so future retrievals honor the superseding fact.
+Because `cognee-rs` exposes its core components as swappable traits, we were able to extend its boundaries to handle live observability and edge-case resilience:
 
+1. **`LiveGraphDb`:** A decorator wrapping `GraphDBTrait` that intercepts internal graph writes and broadcasts them as Tauri IPC events. This lets users watch the knowledge graph build itself node-by-node in real time.
+2. **`TracedLlm` & `TracedEmbedding`:** Wrappers intercepting all LLM prompts and embedding operations, piping them directly into a live Cognition Trace panel for debugging.
+3. **Schema-Repair Layer:** Local LLMs can sometimes output slightly malformed JSON. We built a resilient interceptor layer that catches these near-misses and automatically repairs them against Cognee’s expected schema before deserialization, preventing pipeline crashes.
+4. **`MutedGraphDb`:** A specialized wrapper that allows us to `memify` correction statements into vector memory while intentionally suppressing graph side-effects to keep our visual topology clean.
+5. **Human-in-the-loop Correction:** Free-text human corrections are parsed into `deprecate`/`create`/`retire`/`restore` operations and applied as edge-level adjustments to maintain a clean historical audit log.
 
-## ✨ Key Features
+---
+
+## Key Features
 
 ### 1. Ingestion Command Center
-Drag and drop unstructured text files, ERP CSVs, and email chains. ChowChow automatically chunks, extracts, embeds, and indexes them into the knowledge graph.
+Drag and drop unstructured text files, ERP logs, or email threads. ChowChow automatically handles chunking, entity extraction, and vector indexing on the fly.
 
 ### 2. Interactive Graph Explorer
-Visualize the entire supply chain network. 
-* **Criticality Scoring:** Automatically ranks nodes by dependency weight.
-* **Single Points of Failure (SPOFs):** Graph analytics identify articulation points (e.g. a chokepoint harbor or a single-source distributor) and highlights them with an amber-dashed halo.
-* **Spotlight Mode:** Hover over any node to highlight its immediate upstream suppliers and downstream customers.
+Visualize your entire supply chain network. 
+* **Criticality Scoring:** Automatically ranks nodes by their dependency weight.
+* **SPOF Detection:** Identifies critical chokepoints (like a single-source distributor or bottleneck harbor) and highlights them with an amber-dashed halo.
+* **Spotlight Mode:** Hover over any node to isolate its immediate upstream suppliers and downstream customers.
 
 ### 3. Blast Radius Simulator
-Simulate disruption cascades:
-* Select any node (e.g. *Port of Long Beach* or a supplier facing insolvency).
-* Click **Trace Blast Radius** to see the failure cascade hop-by-hop.
-* View exposure bars and decay-mapped severity alerts showing exactly which end customers and factories will feel the impact.
+Simulate disruption cascades across your network. Select a vulnerable node (e.g., a port facing a strike or a supplier facing insolvency) and trigger a blast radius trace to watch the failure propagate hop-by-hop, highlighting exposure levels and severity risks for end customers.
 
 ### 4. Drift Sentinel (Continuous Verification)
-When new documents (like route update emails) are ingested, the **Drift Sentinel** background worker cross-examines the new claims against the existing knowledge graph. If contradictions are found, it generates a **Drift Alert** in the command center.
+A background worker that cross-examines incoming documents against established facts in the knowledge graph. If an incoming email contradicts an existing route or relationship, it surfaces a drift alert in the UI.
 
 ### 5. Closed-Loop Correction
-Resolve drift alerts in one click. ChowChow uses LLM intent extraction to translate natural language updates into structured graph operations—deprecating invalid relationships and creating new nodes/edges to reflect reality.
+Resolve data drift with a single click. ChowChow extracts intent from natural language updates and translates them into structured graph mutations—deprecating invalid relationships and establishing new paths seamlessly.
 
 ---
 
-## 📐 Architecture
+## Architecture
 
-<img width="968" height="803" alt="image" src="https://github.com/user-attachments/assets/29175bfd-cc4e-42ef-b13f-43d8b3ef0002" />
+<img width="968" height="803" alt="Architecture Diagram" src="https://github.com/user-attachments/assets/29175bfd-cc4e-42ef-b13f-43d8b3ef0002" />
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 1. **Rust:** Install via [rustup](https://rustup.rs/)
 2. **Node.js / Bun:** Install Node.js or [Bun](https://bun.sh/)
-3. **Ollama:** Install [Ollama](https://ollama.com/) and run the model:
+3. **Ollama:** Install [Ollama](https://ollama.com/) and download the required model:
    ```bash
    ollama run gemma4
    ```
