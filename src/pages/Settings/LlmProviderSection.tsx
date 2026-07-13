@@ -62,9 +62,9 @@ export default function LlmProviderSection({
   const geminiModels = [
     { value: 'gemini-3.5-flash', label: 'gemini-3.5-flash (Recommended — latest stable, agentic)' },
     { value: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite (Fast & low-cost bulk)' },
+    { value: 'gemini-3-flash-preview', label: 'gemini-3-flash-preview (Gemini 3 Flash preview)' },
     { value: 'gemini-3.1-pro-preview', label: 'gemini-3.1-pro-preview (Highest intelligence)' },
-    { value: 'gemini-2.5-flash', label: 'gemini-2.5-flash (Best price-performance)' },
-    { value: 'gemini-2.5-flash-lite', label: 'gemini-2.5-flash-lite (Fastest budget)' },
+    { value: 'gemini-flash-latest', label: 'gemini-flash-latest (Always points at latest Flash)' },
     { value: 'gemini-2.5-pro', label: 'gemini-2.5-pro (Deep reasoning)' },
   ];
 

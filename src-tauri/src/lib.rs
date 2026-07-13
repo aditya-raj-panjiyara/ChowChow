@@ -62,8 +62,9 @@ pub fn run() {
                 Arc::new(memory_sqlite::SqliteStubEngine::new(db.clone()));
             handle.manage(AppState::new(stub, db));
 
-            // Start local Anthropic proxy server
+            // Start local Anthropic + Gemini OpenAI-compat proxy servers
             commands::settings::start_proxy_server(handle.clone());
+            commands::gemini_proxy::start_gemini_proxy_server(handle.clone());
 
             // ── Memory Engine ────────────────────────────────────
             // Production path: cognee-rs (in-process, LLM via local Ollama).
@@ -126,7 +127,8 @@ pub fn run() {
                     } else if settings.llm.provider == "openai" {
                         "https://api.openai.com/v1".to_string()
                     } else if settings.llm.provider == "gemini" {
-                        "https://generativelanguage.googleapis.com/v1beta/openai/".to_string()
+                        // Local proxy: rewrites legacy functions → tools for Gemini.
+                        "http://127.0.0.1:11431/v1".to_string()
                     } else if settings.llm.provider == "groq" {
                         "https://api.groq.com/openai/v1".to_string()
                     } else if settings.llm.provider == "anthropic" {

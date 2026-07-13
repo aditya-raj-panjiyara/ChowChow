@@ -201,7 +201,10 @@ pub async fn save_settings(
         } else if settings.llm.provider == "openai" {
             "https://api.openai.com/v1".to_string()
         } else if settings.llm.provider == "gemini" {
-            "https://generativelanguage.googleapis.com/v1beta/openai/".to_string()
+            // Local proxy rewrites legacy OpenAI `functions`/`function_call`
+            // (used by cognee-llm structured output fallback) into Gemini's
+            // modern `tools`/`tool_choice` format.
+            "http://127.0.0.1:11431/v1".to_string()
         } else if settings.llm.provider == "groq" {
             "https://api.groq.com/openai/v1".to_string()
         } else if settings.llm.provider == "anthropic" {

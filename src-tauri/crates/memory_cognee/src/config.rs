@@ -53,14 +53,19 @@ impl Default for CogneeAppConfig {
 pub fn apply_env(config: &CogneeAppConfig) {
     // SAFETY: called once at startup before any concurrent access.
     // cognee-lib's ConfigManager::from_env() reads these synchronously.
+    //
+    // Strip trailing slashes: cognee-llm builds URLs as `{base}/chat/completions`.
+    // A base like `.../openai/` becomes `.../openai//chat/completions`, which
+    // Google's Gemini OpenAI-compat endpoint rejects with HTTP 404.
+    let llm_endpoint = config.llm_endpoint.trim_end_matches('/').to_string();
     unsafe {
         // LLM — env var names confirmed from cognee-lib config.rs:242-248
-        std::env::set_var("OPENAI_URL", &config.llm_endpoint);
+        std::env::set_var("OPENAI_URL", &llm_endpoint);
         std::env::set_var("OPENAI_MODEL", &config.llm_model);
         std::env::set_var("OPENAI_TOKEN", &config.llm_api_key);
 
         // Also set the canonical names (some paths read these directly)
-        std::env::set_var("LLM_ENDPOINT", &config.llm_endpoint);
+        std::env::set_var("LLM_ENDPOINT", &llm_endpoint);
         std::env::set_var("LLM_MODEL", &config.llm_model);
         std::env::set_var("LLM_API_KEY", &config.llm_api_key);
 
