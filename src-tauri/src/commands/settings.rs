@@ -116,27 +116,30 @@ pub fn get_settings_path(app_handle: &AppHandle) -> PathBuf {
         .join("settings.json")
 }
 
-/// Anthropic retired the Claude 3.x models (claude-3-5-haiku-latest 404s
-/// since 2026-02-19). Heal stored settings to the current equivalents so a
-/// stale settings.json doesn't break every LLM call.
+/// Heal stored settings when providers retire model IDs so a stale
+/// settings.json doesn't break every LLM call.
 fn heal_legacy_model(settings: &mut AppSettings) {
-    if settings.llm.provider != "anthropic" {
-        return;
-    }
-    let healed = match settings.llm.model.as_str() {
-        m if m.starts_with("claude-3-5-haiku") || m.starts_with("claude-3-haiku") => {
+    let healed = match (settings.llm.provider.as_str(), settings.llm.model.as_str()) {
+        // Anthropic retired Claude 3.x (claude-3-5-haiku-latest 404s since 2026-02-19)
+        ("anthropic", m) if m.starts_with("claude-3-5-haiku") || m.starts_with("claude-3-haiku") => {
             Some("claude-haiku-4-5")
         }
-        m if m.starts_with("claude-3-5-sonnet") || m.starts_with("claude-3-7-sonnet") => {
+        ("anthropic", m) if m.starts_with("claude-3-5-sonnet") || m.starts_with("claude-3-7-sonnet") => {
             Some("claude-sonnet-5")
         }
-        m if m.starts_with("claude-3-opus") => Some("claude-opus-4-8"),
+        ("anthropic", m) if m.starts_with("claude-3-opus") => Some("claude-opus-4-8"),
+        // Gemini 1.5 / 2.0 are shut down; map to current stable equivalents
+        ("gemini", m) if m.starts_with("gemini-1.5-flash") || m.starts_with("gemini-2.0-flash") => {
+            Some("gemini-3.5-flash")
+        }
+        ("gemini", m) if m.starts_with("gemini-1.5-pro") => Some("gemini-2.5-pro"),
+        ("gemini", "gemma4") => Some("gemini-3.5-flash"),
         _ => None,
     };
     if let Some(new_model) = healed {
         eprintln!(
-            "[settings] '{}' is retired on the Anthropic API — using '{}' instead",
-            settings.llm.model, new_model
+            "[settings] '{}' is retired on the {} API — using '{}' instead",
+            settings.llm.model, settings.llm.provider, new_model
         );
         settings.llm.model = new_model.to_string();
     }

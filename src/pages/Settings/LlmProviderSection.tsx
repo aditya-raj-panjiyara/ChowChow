@@ -60,10 +60,12 @@ export default function LlmProviderSection({
   ];
 
   const geminiModels = [
-    { value: 'gemini-1.5-flash', label: 'gemini-1.5-flash (Recommended - Instant replies)' },
-    { value: 'gemma4', label: 'gemma4 (Recommended - Instant replies)' },
-    { value: 'gemini-1.5-pro', label: 'gemini-1.5-pro (High intelligence)' },
-    { value: 'gemini-2.0-flash', label: 'gemini-2.0-flash (Next-gen)' },
+    { value: 'gemini-3.5-flash', label: 'gemini-3.5-flash (Recommended — latest stable, agentic)' },
+    { value: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite (Fast & low-cost bulk)' },
+    { value: 'gemini-3.1-pro-preview', label: 'gemini-3.1-pro-preview (Highest intelligence)' },
+    { value: 'gemini-2.5-flash', label: 'gemini-2.5-flash (Best price-performance)' },
+    { value: 'gemini-2.5-flash-lite', label: 'gemini-2.5-flash-lite (Fastest budget)' },
+    { value: 'gemini-2.5-pro', label: 'gemini-2.5-pro (Deep reasoning)' },
   ];
 
   const groqModels = [

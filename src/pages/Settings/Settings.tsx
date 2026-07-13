@@ -103,7 +103,7 @@ export default function Settings() {
           setProvider(p);
           // Set default model on provider change
           if (p === 'openai') setModel('gpt-4o-mini');
-          else if (p === 'gemini') setModel('gemini-1.5-flash');
+          else if (p === 'gemini') setModel('gemini-3.5-flash');
           else if (p === 'groq') setModel('llama-3.1-70b-versatile');
           else if (p === 'anthropic') setModel('claude-sonnet-5');
           else if (p === 'local') setModel(systemArch === 'aarch64' ? 'llama3.1:8b' : 'llama3.2:3b');
