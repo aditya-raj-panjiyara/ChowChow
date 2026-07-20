@@ -14,7 +14,13 @@ Because it's built using **cognee-rs** (the native Rust implementation of Cognee
 
 ---
 
-<iframe width="560" height="315" src="https://www.youtube.com/embed/7jjACyRivIk?si=mtreHDC5rVkO1OWC" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=7jjACyRivIk">
+    <img src="https://img.youtube.com/vi/7jjACyRivIk/maxresdefault.jpg" alt="ChowChow Supply Chain Map Demo" width="700" />
+  </a>
+  <br />
+  <em>Watch the ChowChow demo: Google Map for your supply chain</em>
+</p>
 
 ## Cognee Integration
 
