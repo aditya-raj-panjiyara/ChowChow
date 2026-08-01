@@ -83,6 +83,8 @@ export interface FileItem {
   /** Current processing stage description */
   stageText?: string;
   error?: string;
+  /** Caveat on a completed ingest — e.g. a large table read only in part */
+  note?: string;
 }
 
 /** Query confidence level */

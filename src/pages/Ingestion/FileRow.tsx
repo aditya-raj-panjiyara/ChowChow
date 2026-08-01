@@ -39,7 +39,9 @@ const typeIcons: Record<string, ReactNode> = {
 /**
  * FileRow — single file in the ingestion list.
  * Shows filename (mono), file type icon, size, and pipeline status pill.
- * Failed files show an inline error expand.
+ * Failed files show an inline error expand; a completed file that was read
+ * only in part (large table hitting the row budget) carries its caveat
+ * inline, so "complete" is never mistaken for "exhaustive".
  */
 export default function FileRow({ file }: FileRowProps) {
   return (
@@ -47,7 +49,10 @@ export default function FileRow({ file }: FileRowProps) {
       <div className="file-row__icon">
         {typeIcons[file.type] || typeIcons['pdf']}
       </div>
-      <span className="file-row__name">{file.name}</span>
+      <div className="file-row__label">
+        <span className="file-row__name">{file.name}</span>
+        {file.note && <span className="file-row__note">{file.note}</span>}
+      </div>
       <span className="file-row__stage text-mono-sm">{file.size}</span>
       <StatusPill status={file.status} stageText={file.stageText !== 'Done' ? file.stageText : undefined} />
       {file.status === 'failed' && file.error && (

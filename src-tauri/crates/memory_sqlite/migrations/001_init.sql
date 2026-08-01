@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS ingestion_jobs (
     relationships_extracted INTEGER,
     error_message   TEXT,
     created_at      TEXT NOT NULL,
-    completed_at    TEXT
+    completed_at    TEXT,
+    notes           TEXT             -- caveat on a *successful* read, e.g. row budget hit
 );
 
 -- Command Center alerts — stability/risk signals surfaced to the user.

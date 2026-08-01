@@ -53,6 +53,8 @@ export interface IngestionJob {
   error_message: string | null;
   created_at: string;
   completed_at: string | null;
+  /** Caveat on a *successful* ingest — e.g. a large table read only up to the row budget. */
+  notes: string | null;
 }
 
 export interface CorrectionEntry {
@@ -104,6 +106,11 @@ export interface BlastRadiusResult {
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
+/**
+ * Queue a file for ingestion. Resolves as soon as the job is registered —
+ * extraction continues in the backend, so poll `getIngestionStatus` for
+ * progress rather than treating this promise as "done".
+ */
 export async function ingestFile(path: string, sourceType: string): Promise<IngestionJob> {
   return invoke('ingest_file', { path, sourceType });
 }

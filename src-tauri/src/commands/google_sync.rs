@@ -17,6 +17,7 @@
 
 use crate::state::AppState;
 use base64::Engine as _;
+use crate::commands::ingestion::ingest_gated;
 use domain::ingestion_service::IngestionService;
 use memory_engine::SourceType;
 use serde::{Deserialize, Serialize};
@@ -377,6 +378,9 @@ pub async fn sync_google_workspace(
     fs::create_dir_all(&sync_dir).map_err(|e| format!("cannot create sync directory: {e}"))?;
 
     let ingestion = IngestionService::new(state.memory(), state.db.clone());
+    // Shared with dropped-file ingestion — cognee allows only one cognify run
+    // per dataset at a time.
+    let gate = state.ingest_gate();
     let mut files_synced = 0;
     let mut entities_extracted = 0;
 
@@ -411,7 +415,7 @@ pub async fn sync_google_workspace(
 
         for (path, source) in mock_files {
             let path_str = path.to_string_lossy().to_string();
-            match ingestion.ingest_file(&path_str, source).await {
+            match ingest_gated(&ingestion, &gate, &path_str, source).await {
                 Ok(job) => {
                     files_synced += 1;
                     entities_extracted += job.entities_extracted.unwrap_or(0) as u32;
@@ -483,7 +487,7 @@ pub async fn sync_google_workspace(
 
                                     let path_str = file_path.to_string_lossy().to_string();
                                     if let Ok(job) =
-                                        ingestion.ingest_file(&path_str, SourceType::Email).await
+                                        ingest_gated(&ingestion, &gate, &path_str, SourceType::Email).await
                                     {
                                         files_synced += 1;
                                         entities_extracted +=
@@ -531,7 +535,7 @@ pub async fn sync_google_workspace(
 
                                     let path_str = file_path.to_string_lossy().to_string();
                                     if let Ok(job) =
-                                        ingestion.ingest_file(&path_str, SourceType::Pdf).await
+                                        ingest_gated(&ingestion, &gate, &path_str, SourceType::Pdf).await
                                     {
                                         files_synced += 1;
                                         entities_extracted +=

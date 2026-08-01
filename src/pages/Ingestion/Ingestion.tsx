@@ -31,6 +31,7 @@ function jobToFileItem(job: IngestionJob): FileItem {
     status,
     stageText: stageLabel(job),
     error: job.error_message ?? undefined,
+    note: job.notes ?? undefined,
   };
 }
 

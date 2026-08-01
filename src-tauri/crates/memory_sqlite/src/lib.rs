@@ -77,6 +77,20 @@ impl SqliteStubEngine {
                 .execute(pool)
                 .await?;
         }
+
+        // 005 — Ingestion jobs carry a caveat about *how* the source was read
+        // (e.g. a large table ingested only up to the row budget), so a
+        // partial ingest reports 'complete' without pretending it was total.
+        let has_notes: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM pragma_table_info('ingestion_jobs') WHERE name = 'notes'",
+        )
+        .fetch_optional(pool)
+        .await?;
+        if has_notes.is_none() {
+            sqlx::query("ALTER TABLE ingestion_jobs ADD COLUMN notes TEXT")
+                .execute(pool)
+                .await?;
+        }
         Ok(())
     }
 }
@@ -191,6 +205,7 @@ impl MemoryEngine for SqliteStubEngine {
         Ok(IngestSummary {
             entities_extracted,
             relationships_extracted,
+            notes: None,
         })
     }
 

@@ -6199,6 +6199,7 @@ dependencies = [
  "chrono",
  "cognee-lib",
  "cognee-session",
+ "csv",
  "memory_engine",
  "serde",
  "serde_json",

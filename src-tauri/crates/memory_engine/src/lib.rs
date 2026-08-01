@@ -55,7 +55,7 @@ pub enum ConfidenceLevel {
 }
 
 /// Classification of an ingested document's origin.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 pub enum SourceType {
     Erp,
     Email,
@@ -92,6 +92,11 @@ impl std::str::FromStr for SourceType {
 pub struct IngestSummary {
     pub entities_extracted: u32,
     pub relationships_extracted: u32,
+    /// Caveat about *how* the source was read — e.g. a large table ingested
+    /// only up to the row budget. Surfaced in the Ingestion tab so a partial
+    /// ingest is never mistaken for a complete one.
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// Full snapshot of the knowledge graph for the Graph Explorer UI.

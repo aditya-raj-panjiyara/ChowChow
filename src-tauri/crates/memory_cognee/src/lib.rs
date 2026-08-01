@@ -20,6 +20,7 @@ pub mod config;
 pub mod live_graph;
 pub mod muted_graph;
 pub mod schema_repair;
+pub mod tabular;
 pub mod trace;
 
 use std::borrow::Cow;
@@ -165,6 +166,13 @@ impl CogneeMemoryEngine {
             None
         };
 
+        let owner_id = Uuid::new_v4(); // Default owner for single-user desktop app
+
+        // Release any cognify lock left behind by a previous run.
+        if let Some(ref db_conn) = db {
+            clear_stale_pipeline_locks(db_conn.clone(), owner_id).await;
+        }
+
         // Construct AddPipeline
         let ingest_db = db.clone().ok_or_else(|| {
             MemoryError::Storage("relational database connection is required for ingestion".to_string())
@@ -249,8 +257,6 @@ sc:fulfills rdf:type owl:ObjectProperty ;
                 Arc::new(cognee_lib::ontology::NoOpOntologyResolver::new())
             }
         };
-
-        let owner_id = Uuid::new_v4(); // Default owner for single-user desktop app
 
         Ok(Self {
             dataset_name: app_config.dataset_name,
@@ -389,22 +395,151 @@ struct CreateOp {
     relationship: String,
 }
 
+/// How many recent pipeline rows to inspect when hunting for a stale lock.
+/// Only the newest row per (dataset, pipeline) decides the verdict, so this
+/// needs to be deep enough to cover the datasets in play, not the full audit
+/// trail.
+const STALE_LOCK_SCAN_LIMIT: u32 = 200;
+
+/// Release cognify locks orphaned by a previous run.
+///
+/// cognee gates `cognify` on the newest `pipeline_runs` row for a
+/// `(dataset, pipeline)` pair: `STARTED` means "already running" and every
+/// later ingest is rejected. That row lives in the database, so a run
+/// interrupted midway — the app quit or killed during a long extraction —
+/// leaves the dataset permanently wedged with
+/// "pipeline cognify for dataset ... is already running", surviving restarts.
+///
+/// At startup nothing can legitimately be mid-cognify in this process, so any
+/// `STARTED` row is by definition stale. Recovery appends a fresh `INITIATED`
+/// row, which qualifies as "proceed" — the audit trail is left intact rather
+/// than rewritten.
+///
+/// Best-effort: a failure here must not stop the engine from coming up, since
+/// the common case is a database with no stale rows at all.
+async fn clear_stale_pipeline_locks(db: Arc<DatabaseConnection>, owner_id: Uuid) {
+    use cognee_lib::cognee_database::{
+        PipelineRunRepository, PipelineRunStatus, SeaOrmPipelineRunRepository,
+    };
+    use std::collections::HashSet;
+
+    let repo: Arc<dyn PipelineRunRepository> = Arc::new(SeaOrmPipelineRunRepository::new(db));
+
+    let runs = match repo.list_recent(None, STALE_LOCK_SCAN_LIMIT).await {
+        Ok(runs) => runs,
+        Err(e) => {
+            eprintln!("[cognee] could not check for stale pipeline locks (non-fatal): {e}");
+            return;
+        }
+    };
+
+    // Newest first, so the first row seen for a pair is the deciding one.
+    let mut decided: HashSet<(Uuid, String)> = HashSet::new();
+    for run in runs {
+        let Some(dataset_id) = run.dataset_id else {
+            continue;
+        };
+        let key = (dataset_id, run.pipeline_name.clone());
+        if !decided.insert(key) {
+            continue;
+        }
+        if !matches!(run.status, PipelineRunStatus::Started) {
+            continue;
+        }
+
+        match cognee_lib::api::reset_pipeline_run_status(
+            repo.clone(),
+            owner_id,
+            dataset_id,
+            &run.pipeline_name,
+        )
+        .await
+        {
+            Ok(()) => eprintln!(
+                "[cognee] released stale '{}' lock on dataset {dataset_id} \
+                 (previous run did not finish)",
+                run.pipeline_name
+            ),
+            Err(e) => eprintln!("[cognee] could not release stale lock (non-fatal): {e}"),
+        }
+    }
+}
+
+/// A source file resolved into pipeline input.
+struct LoadedSource {
+    /// One or more documents to hand to `remember()`.
+    data: Vec<DataInput>,
+    /// Line for the Cognition Trace.
+    trace: String,
+    /// User-facing caveat recorded on the ingestion job — set when the load
+    /// was lossy (row budget hit), so partial ingests are never silent.
+    note: Option<String>,
+}
+
+/// Read a file into pipeline documents. Blocking; runs on `spawn_blocking`.
+///
+/// Tabular sources take the row-wise path: streamed, deduplicated and bounded,
+/// because a spreadsheet fed through the prose chunker turns megabytes into
+/// tens of thousands of LLM calls. Everything else is read whole.
+fn load_source(path: &str) -> Result<LoadedSource, MemoryError> {
+    let file_name = std::path::Path::new(path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string());
+
+    if tabular::is_tabular(path) {
+        let load = tabular::load(path).map_err(MemoryError::IngestionFailed)?;
+        let trace = load.summary(&file_name);
+        let note = load.truncated.then(|| {
+            format!(
+                "Large table: ingested the first {} distinct rows of {file_name}. \
+                 Raise INGEST_MAX_CSV_ROWS to take in more.",
+                load.rows_used
+            )
+        });
+        // Each batch is small, so normalizing per document costs nothing.
+        let data = load
+            .documents
+            .iter()
+            .map(|doc| DataInput::Text(preprocess_text(doc)))
+            .collect();
+        return Ok(LoadedSource { data, trace, note });
+    }
+
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| MemoryError::IngestionFailed(format!("cannot read file: {e}")))?;
+    let content = preprocess_text(&raw);
+    let trace = format!("{} KB of text from {file_name}", content.len() / 1024);
+
+    Ok(LoadedSource {
+        data: vec![DataInput::Text(content)],
+        trace,
+        note: None,
+    })
+}
+
+/// Rewrite `a/b` as `a and b` so the extractor reads slashed pairs as two
+/// entities rather than one hyphenated blob.
+///
+/// Single-pass over a peekable iterator: the previous form collected the whole
+/// input into a `Vec<char>` first, which costs 4 bytes per character — 160 MB
+/// of scratch for a 40 MB file, on top of the input and the output.
 fn preprocess_text(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '/' {
-            let prev_ok = i > 0 && chars[i - 1].is_alphanumeric();
-            let next_ok = i + 1 < chars.len() && chars[i + 1].is_alphanumeric();
-            if prev_ok && next_ok {
-                result.push_str(" and ");
-                i += 1;
-                continue;
-            }
+    let mut prev: Option<char> = None;
+    let mut chars = text.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        let is_pair_separator = c == '/'
+            && prev.is_some_and(|p| p.is_alphanumeric())
+            && chars.peek().is_some_and(|n| n.is_alphanumeric());
+
+        if is_pair_separator {
+            result.push_str(" and ");
+        } else {
+            result.push(c);
         }
-        result.push(chars[i]);
-        i += 1;
+        prev = Some(c);
     }
     result
 }
@@ -413,8 +548,9 @@ fn preprocess_text(text: &str) -> String {
 impl MemoryEngine for CogneeMemoryEngine {
     /// Maps to `cognee_lib::api::remember()` — add + cognify + optional improve.
     ///
-    /// Accepts a file path, reads it, and passes it as `DataInput::Text` to
-    /// the remember pipeline.
+    /// Reads the file into one or more `DataInput::Text` documents. CSV/TSV
+    /// files are streamed row-wise and bounded (see [`tabular`]); everything
+    /// else is read whole as prose.
     async fn ingest_document(
         &self,
         path: &str,
@@ -426,18 +562,20 @@ impl MemoryEngine for CogneeMemoryEngine {
             .unwrap_or_else(|| path.to_string());
         let op = trace::begin_op(format!("Ingest · {file_name}"));
 
-        // Read file content to pass as DataInput::Text
-        let raw_content = tokio::fs::read_to_string(path)
+        // Reading and normalizing is CPU/IO-bound and, for a large export,
+        // measured in hundreds of milliseconds — keep it off the async
+        // workers so the rest of the app stays responsive.
+        let owned_path = path.to_string();
+        let source = tokio::task::spawn_blocking(move || load_source(&owned_path))
             .await
-            .map_err(|e| MemoryError::IngestionFailed(format!("cannot read file: {e}")))?;
-        let content = preprocess_text(&raw_content);
-        trace::stage("read file", format!("{} chars from {file_name}", content.chars().count()));
+            .map_err(|e| MemoryError::IngestionFailed(format!("file reader panicked: {e}")))??;
+        let LoadedSource { data, trace, note } = source;
+
+        trace::stage("read source", trace);
         trace::stage(
             "remember() pipeline",
             "add → chunk → cognify (LLM entity extraction) → embed → graph + vector write",
         );
-
-        let data = vec![DataInput::Text(content)];
 
         let result: RememberResult = remember(
             data,
@@ -479,6 +617,7 @@ impl MemoryEngine for CogneeMemoryEngine {
         ));
 
         Ok(IngestSummary {
+            notes: note,
             entities_extracted: entities,
             relationships_extracted: relationships,
         })

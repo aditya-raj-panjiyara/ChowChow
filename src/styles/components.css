@@ -282,13 +282,27 @@ g:active {
   color: var(--text-muted);
 }
 
-.file-row__name {
+.file-row__label {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-row__name {
   font-family: 'JetBrains Mono', monospace;
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Caveat on a completed ingest — informational, not an error. */
+.file-row__note {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--signal-amber);
 }
 
 .file-row__stage {
